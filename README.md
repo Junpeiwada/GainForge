@@ -12,6 +12,22 @@ HDR ゲインマップ付き JPEG を、ゲインマップを保持したまま 
 
 ![GainForge アプリ画面](Docs/assets/GainForge.png)
 
+## ダウンロード / インストール
+
+最新版は [Releases](https://github.com/Junpeiwada/GainForge/releases) から `.zip` を入手できる。
+
+1. `GainForge-x.y.z.zip` を展開し、`GainForge.app` を `アプリケーション` フォルダへ移動。
+2. ダブルクリックで起動（Apple の公証済みのため Gatekeeper 警告は出ない）。
+
+### 自動更新
+
+アプリは [Sparkle](https://sparkle-project.org/) による自動更新に対応する。メニュー
+**「GainForge について」**で開く About 画面の「更新を確認」から手動確認でき、
+「起動時に自動で更新を確認」を有効にすると新版を定期検知して更新する
+（ダウンロード→インストール→再起動まで自動）。
+
+リリース手順・配布の仕組みは [Docs/リリース手順.md](Docs/リリース手順.md) を参照。
+
 ## 必要環境
 
 - macOS 15 以降（ISO ゲインマップ対応のため）

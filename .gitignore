@@ -7,6 +7,9 @@
 DerivedData/
 .swiftpm/
 
+# xcodebuild のローカル成果物（DerivedData / 解決済み SwiftPM パッケージ）
+App/build/
+
 # XcodeGen が project.yml から生成する成果物（リポジトリには含めない）
 *.xcodeproj/
 

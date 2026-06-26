@@ -1,6 +1,6 @@
 name: GainForge
 options:
-  bundleIdPrefix: com.gainforge
+  bundleIdPrefix: com.junpeiwada
   deploymentTarget:
     macOS: "15.0"
   createIntermediateGroups: true
@@ -9,6 +9,10 @@ packages:
   # 同一リポジトリ内の Swift Package（Core）をローカル参照する。
   GainForge:
     path: ..
+  # アプリ内自動更新フレームワーク。GitHub Pages の appcast を参照して更新する。
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.3"
 
 targets:
   GainForge:
@@ -19,17 +23,35 @@ targets:
     dependencies:
       - package: GainForge
         product: GainForgeCore
+      - package: Sparkle
+        product: Sparkle
+    # Sparkle の任意キー（SUFeedURL/SUPublicEDKey）は INFOPLIST_KEY_* では注入できないため、
+    # 実 Info.plist を XcodeGen で生成する。GENERATE_INFOPLIST_FILE は使わない。
+    # （生成先は Sources フォルダ参照の外＝リソース誤混入を避けるため App/GainForge-Info.plist）
+    info:
+      path: GainForge-Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.photography
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: ""
+        # Sparkle: 更新フィード（GitHub Pages でホストする appcast）
+        SUFeedURL: "https://junpeiwada.github.io/GainForge/appcast.xml"
+        # Sparkle: appcast 署名検証用の EdDSA 公開鍵（generate_keys で生成・公開鍵なので公開可）。
+        # 対応する秘密鍵はキーチェーンに保存され、CI 署名用に Secret SPARKLE_PRIVATE_KEY へ登録する。
+        SUPublicEDKey: "WiyUPbS5LnynuM2+J8Z/n+nRIhbjDpwtD/rbmcWeGVg="
+        # 起動時に自動で更新確認（既定 ON、間隔 24h）。ユーザーは About 画面で切替可能。
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.gainforge.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.junpeiwada.GainForge
         PRODUCT_NAME: GainForge
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
-        GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.photography
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
         # ローカルツールのため App Sandbox は無効（入力隣への .heic 書き出しを許可）。
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
@@ -50,4 +72,4 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
-        PRODUCT_BUNDLE_IDENTIFIER: com.gainforge.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.junpeiwada.GainForge.tests
