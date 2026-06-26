@@ -16,6 +16,7 @@ struct ToolbarView: View {
                     .monospacedDigit()
                     .frame(width: 38, alignment: .leading)
             }
+            .fixedSize()
 
             Divider().frame(height: 22)
 
@@ -37,9 +38,10 @@ struct ToolbarView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .help(model.customFolder?.path ?? "未選択")
-                        .frame(maxWidth: 120, alignment: .leading)
+                        .frame(width: 120, alignment: .leading)
                 }
             }
+            .fixedSize()
 
             Spacer()
 

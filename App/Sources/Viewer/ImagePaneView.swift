@@ -22,12 +22,23 @@ struct ImagePane: NSViewRepresentable {
             nsView.model = model
             nsView.relayout()
         }
+        // NSView 内のスピナーを isLoading の変化に追従させる。
+        nsView.setLoading(image == nil && model.isLoading)
     }
 }
 
 /// 画像を zoom / center に従って配置する自前ビュー。HDR は内包する NSImageView に委ねる。
 final class PaneNSView: NSView {
     let imageView = NSImageView()
+    private let spinner: NSProgressIndicator = {
+        let s = NSProgressIndicator()
+        s.style = .spinning
+        s.controlSize = .large
+        s.appearance = NSAppearance(named: .vibrantDark)
+        s.isDisplayedWhenStopped = false
+        s.translatesAutoresizingMaskIntoConstraints = false
+        return s
+    }()
     weak var model: ViewerModel?
     private var lastDrag: CGPoint?
 
@@ -45,15 +56,25 @@ final class PaneNSView: NSView {
         imageView.imageAlignment = .alignCenter
         imageView.wantsLayer = true
         addSubview(imageView)
+        addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setLoading(_ loading: Bool) {
+        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+    }
 
     func configure(image: NSImage?, isHDR: Bool, model: ViewerModel) {
         self.model = model
         imageView.image = image
         // 変換後 HEIC は HDR、変換前 JPEG は SDR。非対応ディスプレイでは自動的に SDR へフォールバック。
         imageView.preferredImageDynamicRange = isHDR ? .high : .standard
+        setLoading(image == nil && model.isLoading)
         relayout()
     }
 

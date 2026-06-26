@@ -117,28 +117,45 @@ final class ViewerModel: ObservableObject {
         let requests = panes.map { (url: $0.url, hdr: $0.isHDR) }
 
         // 原寸読み込み・デコード・寸法取得はすべてバックグラウンドで行い、選択時の UI を止めない。
+        // 複数ペイン（JPEG + HEIC）は withTaskGroup で並列デコードし、合計時間を max(各ペイン) に短縮する。
         // HDR/EXIF 回転を現状どおり正しく扱うため、描画は従来の NSImage(contentsOf:) 経路を維持する。
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             if Task.isCancelled { return }
-            var images: [NSImage?] = []
-            var sizes: [CGSize] = []
-            for req in requests {
-                if Task.isCancelled { return }
-                // NSImage 生成・寸法取得（ともにディスク I/O）をメインスレッドから外す。
-                // 描画は従来どおり NSImageView の HDR 経路に委ねるため、HDR/EXIF 回転は現状と同一。
-                let image = NSImage(contentsOf: req.url)
-                let size = ImageProbe.pixelSize(for: req.url) ?? CGSize(width: 1, height: 1)
-                images.append(image)
-                sizes.append(size)
+            let t0 = Date()
+
+            // index 付きで並列デコードし、順序を保って結果を集める。
+            typealias PaneResult = (index: Int, image: NSImage?, size: CGSize)
+            var results: [PaneResult] = await withTaskGroup(of: PaneResult.self) { group in
+                for (i, req) in requests.enumerated() {
+                    group.addTask(priority: .userInitiated) {
+                        let tImg = Date()
+                        let image = NSImage(contentsOf: req.url)
+                        let tSize = Date()
+                        let size = ImageProbe.pixelSize(for: req.url) ?? CGSize(width: 1, height: 1)
+                        let tDone = Date()
+                        print("[Viewer] pane[\(i)] \(req.url.lastPathComponent)"
+                            + "  NSImage: \(String(format: "%.3f", tSize.timeIntervalSince(tImg)))s"
+                            + "  pixelSize: \(String(format: "%.3f", tDone.timeIntervalSince(tSize)))s")
+                        return (i, image, size)
+                    }
+                }
+                var collected: [PaneResult] = []
+                for await r in group { collected.append(r) }
+                return collected
             }
+            results.sort { $0.index < $1.index }
+
+            print("[Viewer] total load: \(String(format: "%.3f", Date().timeIntervalSince(t0)))s")
             if Task.isCancelled { return }
-            await self?.applyDecoded(DecodedPanes(images: images, sizes: sizes), generation: generation)
+            let payload = DecodedPanes(images: results.map { $0.image }, sizes: results.map { $0.size })
+            await self?.applyDecoded(payload, generation: generation)
         }
     }
 
     /// バックグラウンドで読み込んだ結果を反映する。世代が古ければ（既に次の選択へ移っていれば）破棄する。
     private func applyDecoded(_ payload: DecodedPanes, generation: Int) {
         guard generation == loadGeneration else { return }
+        print("[Viewer] applyDecoded → MainActor reached")
         images = payload.images
         paneSizes = payload.sizes
         let size = payload.sizes.first ?? CGSize(width: 1, height: 1)

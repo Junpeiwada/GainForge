@@ -19,6 +19,7 @@ struct GainForgeApp: App {
                 .environmentObject(viewer)
                 .frame(minWidth: 720, minHeight: 460)
                 .background(WindowFrameAutosave(name: Self.frameAutosaveName))
+                .background(MainWindowTerminator())
         }
         .windowResizability(.contentMinSize)
         .commands {
@@ -34,6 +35,7 @@ struct GainForgeApp: App {
         Window("比較ビューワ", id: Self.viewerWindowID) {
             ViewerView()
                 .environmentObject(viewer)
+                .background(WindowFrameAutosave(name: "GainForgeViewerWindow"))
         }
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(.suppressed)

@@ -4,9 +4,13 @@ import AppKit
 /// 中央のファイル一覧テーブル（ドロップ受付兼用）。空のときは Empty state。
 struct FileTableView: View {
     @EnvironmentObject var model: AppViewModel
-    @EnvironmentObject var viewer: ViewerModel
     @Environment(\.openWindow) private var openWindow
     @State private var isTargeted = false
+
+    /// 行を比較ビューワで開く。ContentView から注入し、ViewerModel への直接依存を持たせない。
+    /// （FileTableView が ViewerModel を @EnvironmentObject で持つと、viewer の @Published 変化で
+    ///  Table ごと再描画され、選択が意図せずリセットされる問題が起きるため）
+    var onOpenViewer: (FileItem) -> Void
 
     var body: some View {
         ZStack {
@@ -138,10 +142,8 @@ struct FileTableView: View {
         }
     }
 
-    /// 比較ビューワへ対象を読み込み、ウィンドウを前面化する（単一インスタンス）。
-    /// 変換済み行は前後比較、未変換行は元画像のみを表示する（display 側で判定）。
     private func openViewer(_ item: FileItem) {
-        viewer.display(item)
+        onOpenViewer(item)
         openWindow(id: GainForgeApp.viewerWindowID)
     }
 

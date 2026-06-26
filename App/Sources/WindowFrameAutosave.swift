@@ -38,3 +38,36 @@ struct WindowFrameAutosave: NSViewRepresentable {
         NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
     }
 }
+
+/// メインウィンドウが閉じられたときにアプリを終了する橋渡し。
+/// SwiftUI の WindowGroup はデフォルトで最後のウィンドウを閉じてもアプリが残るため、
+/// NSWindow の willClose 通知を直接受けて NSApp.terminate を呼ぶ。
+struct MainWindowTerminator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            context.coordinator.attach(to: window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        private var token: NSObjectProtocol?
+
+        func attach(to window: NSWindow) {
+            guard token == nil else { return }
+            token = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { _ in MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        }
+
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+    }
+}

@@ -98,14 +98,6 @@ struct ViewerView: View {
         VStack(spacing: 0) {
             ImagePane(model: model, image: image, isHDR: pane.isHDR)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 原寸画像の読み込み中（まだ画像が届いていないペイン）はスピナーを出す。
-                .overlay {
-                    if image == nil && model.isLoading {
-                        ProgressView()
-                            .controlSize(.large)
-                            .tint(.white)
-                    }
-                }
             captionBar(pane, size: size)
         }
         .frame(minWidth: 220)

@@ -9,7 +9,9 @@ struct ContentView: View {
         VStack(spacing: 0) {
             ToolbarView()
             Divider()
-            FileTableView()
+            FileTableView { item in
+                viewer.display(item)
+            }
             Divider()
             StatusBarView()
         }
