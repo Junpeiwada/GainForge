@@ -165,7 +165,10 @@ jobs:
           cp dist/appcast.xml pages/appcast.xml
           cat pages/appcast.xml
 
-      - name: appcast を GitHub Pages へ publish
+      - name: ランディングページ（site/）を配信対象に含める
+        run: cp -R site/. pages/
+
+      - name: appcast / ランディングページを GitHub Pages へ publish
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
