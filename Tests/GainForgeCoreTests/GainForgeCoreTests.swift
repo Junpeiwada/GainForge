@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import ImageIO
 @testable import GainForgeCore
 
 final class GainForgeCoreTests: XCTestCase {
@@ -111,5 +112,30 @@ final class GainForgeCoreTests: XCTestCase {
         XCTAssertTrue(result.isHDR)
         XCTAssertGreaterThan(result.outputBytes, 0)
         XCTAssertTrue(GainForge.hasGainMap(out), "出力にゲインマップが埋め込まれていること")
+
+        // メタデータ（EXIF/TIFF/GPS/Orientation）が元画像から引き継がれていること。
+        let inProps = imageProperties(input)
+        let outProps = imageProperties(out)
+        for dictKey in [kCGImagePropertyExifDictionary, kCGImagePropertyTIFFDictionary,
+                        kCGImagePropertyGPSDictionary] as [CFString] {
+            let key = dictKey as String
+            if let inDict = inProps[key] as? [String: Any], !inDict.isEmpty {
+                let outDict = outProps[key] as? [String: Any] ?? [:]
+                XCTAssertFalse(outDict.isEmpty, "出力に \(key) が引き継がれていること")
+            }
+        }
+        if let inOri = inProps[kCGImagePropertyOrientation as String] {
+            XCTAssertEqual("\(inOri)", "\(outProps[kCGImagePropertyOrientation as String] ?? "")",
+                           "Orientation が保持されていること")
+        }
+    }
+
+    /// 画像ファイルの先頭イメージのプロパティ辞書を取得する（テスト用ヘルパ）。
+    private func imageProperties(_ url: URL) -> [String: Any] {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any] else {
+            return [:]
+        }
+        return props
     }
 }

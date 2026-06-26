@@ -48,6 +48,7 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 4. 補助辞書再構成時の `PixelFormat` は **`32BGRA`** に作り直す（元の非公開フォーマット流用は `Finalize` クラッシュ）。
 5. ゲインマップ ColorSpace は **ハードコードせず元辞書から取得**（機種ごとに異なる）。
 6. 書き出し後に `hasGainMap` で **検算**（補助データ追加は戻り値を返さないため）。
+7. ベース画像を `CGImageDestinationAddImage` に渡す際は **元画像のプロパティ辞書（`CGImageSourceCopyPropertiesAtIndex`）を必ずマージして渡す**。`CGImage` 単体はピクセルのみで EXIF/GPS/TIFF/Orientation を持たず、品質オプションだけ渡すと **全メタデータが失われ、Orientation 欠落で表示が回転し得る**。SDR フォールバック（`writeSDRHEIC`）も同様に ImageIO 経路でプロパティを引き継ぐ。
 
 Core Image の `writeHEIFRepresentation(hdrImage:)` は使わない（差分から再計算してハイライトで色がずれる）。
 

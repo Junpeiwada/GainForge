@@ -3,7 +3,7 @@
 //
 // 方式: ImageIO 低レベル経路で「SDR ベース + 元のカラーゲインマップ」を生転写する。
 // Core Image の writeHEIFRepresentation(hdrImage:) はゲインマップを差分から再計算して
-// ハイライトで色がずれるため使わない。詳細は Docs/調査_色ずれ原因と解法.md を参照。
+// ハイライトで色がずれるため使わない。詳細は Docs/Archive/調査_色ずれ原因と解法.md を参照。
 //
 // 移植元: AISandbox/HDRHEIF/hdrheic.swift（実証・検証済み）。
 
@@ -145,7 +145,12 @@ public enum GainForge {
         guard let dst = CGImageDestinationCreateWithURL(output as CFURL, UTType.heic.identifier as CFString, 1, nil) else {
             throw GainForgeError.destinationCreateFailed(output)
         }
-        CGImageDestinationAddImage(dst, baseCG, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        // 元画像の EXIF/GPS/TIFF/IPTC/Orientation 等のメタデータを引き継ぐ。
+        // CGImage 単体はピクセルのみで属性を持たないため、ここでプロパティ辞書を
+        // 明示的に渡さないと全メタデータが失われる（Orientation も失われ表示が回転し得る）。
+        var baseProps = (CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any]) ?? [:]
+        baseProps[kCGImageDestinationLossyCompressionQuality as String] = quality
+        CGImageDestinationAddImage(dst, baseCG, baseProps as CFDictionary)
         CGImageDestinationAddAuxiliaryDataInfo(dst, kCGImageAuxiliaryDataTypeISOGainMap, aux as CFDictionary)
         guard CGImageDestinationFinalize(dst) else {
             throw GainForgeError.finalizeFailed(output)
@@ -160,19 +165,27 @@ public enum GainForge {
     // MARK: - SDR フォールバック
 
     /// ゲインマップ無し画像を SDR HEIC として書き出す（CLI の `-f` 相当）。
+    ///
+    /// 元画像の EXIF/GPS/TIFF/IPTC/Orientation 等を引き継ぐため、ImageIO 経路で
+    /// プロパティ辞書を明示的に渡す（gain-map 経路と挙動を揃える）。
     private static func writeSDRHEIC(input: URL, output: URL, quality: Double) throws {
-        guard let sdr = CIImage(contentsOf: input) else {
+        guard let src = CGImageSourceCreateWithURL(input as CFURL, nil),
+              let sdr = CIImage(contentsOf: input) else {
             throw GainForgeError.cannotReadSource(input)
         }
-        let ctx = CIContext()
+        let ctx = CIContext(options: nil)
         let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
-        let opts: [CIImageRepresentationOption: Any] = [
-            kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality
-        ]
-        do {
-            try ctx.writeHEIFRepresentation(of: sdr, to: output, format: .RGBA8, colorSpace: p3, options: opts)
-        } catch {
-            throw GainForgeError.sdrWriteFailed(underlying: error)
+        guard let cg = ctx.createCGImage(sdr, from: sdr.extent, format: .RGBA8, colorSpace: p3) else {
+            throw GainForgeError.baseImageUnreadable
+        }
+        guard let dst = CGImageDestinationCreateWithURL(output as CFURL, UTType.heic.identifier as CFString, 1, nil) else {
+            throw GainForgeError.destinationCreateFailed(output)
+        }
+        var props = (CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any]) ?? [:]
+        props[kCGImageDestinationLossyCompressionQuality as String] = quality
+        CGImageDestinationAddImage(dst, cg, props as CFDictionary)
+        guard CGImageDestinationFinalize(dst) else {
+            throw GainForgeError.finalizeFailed(output)
         }
     }
 

@@ -75,26 +75,43 @@ final class AppViewModel: ObservableObject {
     }
 
     /// 今回の変換で処理する対象行の ID 群。
-    /// - 選択があれば、選択された「待機行 or 既存行」を対象にする（既存行も選べば再変換できる。
-    ///   その場合は出力先に既存 HEIC があるため上書き確認ダイアログが出る）。
-    /// - 選択がなければ全待機行を対象にする。既存行は出力済みのため既定の変換からは外す。
-    /// 選択に完了行や削除済み ID が混ざっていても、変換可能な行だけに絞られる。
+    /// - 選択があれば、選択された「変換中以外の行」を対象にする。完了・既存・エラー・スキップ・
+    ///   待機のいずれも、選択すれば何度でも再変換できる（品質を変えてやり直す等）。出力先に
+    ///   既存 HEIC があれば上書き確認ダイアログが出る。
+    /// - 選択がなければ既定の変換対象（待機・完了・エラー・スキップ）を全件処理する。完了行も
+    ///   含めて毎回やり直す。ただし既存（変換前から在った HEIC）はこちらが作ったとは限らないため、
+    ///   既定では外す（再変換したいときは行を選択する）。
+    /// 選択に変換中行や削除済み ID が混ざっていても、変換可能な行だけに絞られる。
     var conversionTargetIDs: [FileItem.ID] {
         let selectedConvertible = items.filter {
-            selection.contains($0.id) && ($0.status == .waiting || $0.status == .existing)
+            selection.contains($0.id) && Self.isReconvertible($0.status)
         }
         if !selectedConvertible.isEmpty { return selectedConvertible.map { $0.id } }
-        return items.filter { $0.status == .waiting }.map { $0.id }
+        return items.filter { Self.isDefaultConvertTarget($0.status) }.map { $0.id }
     }
 
     /// 変換対象の件数（変換ボタンの表示・活性判定に使う）。
     var conversionTargetCount: Int { conversionTargetIDs.count }
 
-    /// 選択に変換可能な行（待機 or 既存）が 1 つでも含まれているか。
+    /// 選択に再変換可能な行（変換中以外）が 1 つでも含まれているか。
     /// ボタン表示を「すべて変換」/「選択を変換」で切り替える基準。
-    /// 完了行だけを選んでいる場合は false 扱いとし、全件変換の表示に倒す。
     var hasConvertibleSelection: Bool {
-        items.contains { ($0.status == .waiting || $0.status == .existing) && selection.contains($0.id) }
+        items.contains { Self.isReconvertible($0.status) && selection.contains($0.id) }
+    }
+
+    /// 選択して再変換できる状態か。変換中以外はすべて対象（既存行も選べばやり直せる）。
+    static func isReconvertible(_ status: RowStatus) -> Bool {
+        status != .converting
+    }
+
+    /// 選択なしの「すべて変換」で既定の対象とみなす状態か。
+    /// 待機・完了・エラー・スキップを含む（完了行も毎回やり直す）。既存（変換前から在った HEIC）は
+    /// こちらが作ったとは限らないため既定では外し、変換中は対象外にする。
+    static func isDefaultConvertTarget(_ status: RowStatus) -> Bool {
+        switch status {
+        case .waiting, .done, .error, .skipped: return true
+        case .existing, .converting: return false
+        }
     }
 
     var canConvert: Bool { isConverting || conversionTargetCount > 0 }

@@ -23,8 +23,6 @@ public enum GainForgeError: Error, Sendable {
     case finalizeFailed(URL)
     /// 書き出し後の検算でゲインマップが埋め込まれていなかった（落とし穴6）。
     case gainMapVerificationFailed(URL)
-    /// SDR HEIC の書き出しに失敗した（基盤エラーを内包）。
-    case sdrWriteFailed(underlying: Error)
     /// 出力先に既存ファイルがあり、上書き許可なしで変換しようとした。
     case outputExists(URL)
 }
@@ -50,8 +48,6 @@ extension GainForgeError: LocalizedError {
             return "HEIC の書き出しに失敗しました: \(url.lastPathComponent)"
         case .gainMapVerificationFailed(let url):
             return "ゲインマップの埋め込み検算に失敗しました: \(url.lastPathComponent)"
-        case .sdrWriteFailed(let underlying):
-            return "SDR HEIC の書き出しに失敗しました: \(underlying.localizedDescription)"
         case .outputExists(let url):
             return "出力先に既存ファイルがあります: \(url.lastPathComponent)"
         }

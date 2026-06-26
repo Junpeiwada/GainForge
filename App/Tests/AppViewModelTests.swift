@@ -251,6 +251,26 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(vm.hasConvertibleSelection)
     }
 
+    /// 再変換対象の判定表。完了・エラー・スキップ行も選択すれば再変換でき、選択なしの
+    /// 「すべて変換」にも含まれる（圧縮率を変えてやり直す等）。既存は選択時のみ、変換中は常に対象外。
+    func testConvertTargetDecisionTable() {
+        // 選択すれば再変換できる（変換中以外すべて）。
+        XCTAssertTrue(AppViewModel.isReconvertible(.waiting))
+        XCTAssertTrue(AppViewModel.isReconvertible(.done))
+        XCTAssertTrue(AppViewModel.isReconvertible(.error))
+        XCTAssertTrue(AppViewModel.isReconvertible(.skipped))
+        XCTAssertTrue(AppViewModel.isReconvertible(.existing))
+        XCTAssertFalse(AppViewModel.isReconvertible(.converting))
+
+        // 選択なしの既定対象。完了行も含むが、既存（こちらが作ったとは限らない）は外す。
+        XCTAssertTrue(AppViewModel.isDefaultConvertTarget(.waiting))
+        XCTAssertTrue(AppViewModel.isDefaultConvertTarget(.done))
+        XCTAssertTrue(AppViewModel.isDefaultConvertTarget(.error))
+        XCTAssertTrue(AppViewModel.isDefaultConvertTarget(.skipped))
+        XCTAssertFalse(AppViewModel.isDefaultConvertTarget(.existing))
+        XCTAssertFalse(AppViewModel.isDefaultConvertTarget(.converting))
+    }
+
     /// 同名 HEIC が無ければ probe 後も「待機」のまま（既定の変換対象に入る）。
     func testProbeKeepsWaitingWhenNoHEIC() async throws {
         let vm = makeVM()
