@@ -3,11 +3,17 @@
 
 # Swift / SwiftPM
 .build/
-*.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 DerivedData/
 .swiftpm/
 
+# XcodeGen が project.yml から生成する成果物（リポジトリには含めない）
+*.xcodeproj/
+
 # Xcode user state
 xcuserdata/
 *.xcuserstate
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:GainForge}",
+            "name": "Debug gainforge",
+            "target": "gainforge",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug gainforge"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:GainForge}",
+            "name": "Release gainforge",
+            "target": "gainforge",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release gainforge"
+        }
+    ]
+}
