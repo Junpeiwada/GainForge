@@ -1,6 +1,8 @@
 import XCTest
 import Foundation
 import ImageIO
+import CoreGraphics
+import UniformTypeIdentifiers
 @testable import GainForgeCore
 
 final class GainForgeCoreTests: XCTestCase {
@@ -23,30 +25,34 @@ final class GainForgeCoreTests: XCTestCase {
         return url
     }
 
-    // MARK: - collectJPEGs
+    // MARK: - collectInputImages
 
-    func testCollectJPEGsFindsJpgAndJpegRecursively() throws {
+    func testCollectInputImagesFindsJpgJpegPngRecursively() throws {
         _ = try touch("a.jpg")
         _ = try touch("b.JPEG")
         _ = try touch("c.png")
+        _ = try touch("d.gif")   // 非対応拡張子は拾わない
         let sub = tmp.appendingPathComponent("sub")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
-        _ = try touch("d.jpeg", in: sub)
+        _ = try touch("e.jpeg", in: sub)
+        _ = try touch("f.PNG", in: sub)
 
-        let found = GainForge.collectJPEGs(tmp).map { $0.lastPathComponent }.sorted()
-        XCTAssertEqual(found, ["a.jpg", "b.JPEG", "d.jpeg"])
+        let found = GainForge.collectInputImages(tmp).map { $0.lastPathComponent }.sorted()
+        XCTAssertEqual(found, ["a.jpg", "b.JPEG", "c.png", "e.jpeg", "f.PNG"])
     }
 
-    func testCollectJPEGsOnSingleFile() throws {
+    func testCollectInputImagesOnSingleFile() throws {
         let jpg = try touch("only.jpg")
-        XCTAssertEqual(GainForge.collectJPEGs(jpg), [jpg])
+        XCTAssertEqual(GainForge.collectInputImages(jpg), [jpg])
         let png = try touch("only.png")
-        XCTAssertEqual(GainForge.collectJPEGs(png), [])
+        XCTAssertEqual(GainForge.collectInputImages(png), [png])
+        let gif = try touch("only.gif")
+        XCTAssertEqual(GainForge.collectInputImages(gif), [])
     }
 
-    func testCollectJPEGsOnMissingPath() {
+    func testCollectInputImagesOnMissingPath() {
         let missing = tmp.appendingPathComponent("nope.jpg")
-        XCTAssertEqual(GainForge.collectJPEGs(missing), [])
+        XCTAssertEqual(GainForge.collectInputImages(missing), [])
     }
 
     // MARK: - uniqueOutputURL（連番付与・上書き回避）
@@ -137,5 +143,128 @@ final class GainForgeCoreTests: XCTestCase {
             return [:]
         }
         return props
+    }
+
+    /// 画像ファイルの先頭イメージの 1 チャンネルあたりビット数を返す（取得不能時は nil）。
+    private func imageDepth(_ url: URL) -> Int? {
+        imageProperties(url)[kCGImagePropertyDepth as String] as? Int
+    }
+
+    // MARK: - SDR→HDR 合成（明部加重カーブ）
+
+    /// 明るいハイライトと（JPEG のみ）EXIF/Orientation を持つ合成 SDR 画像を作る（フィクスチャ不要）。
+    /// `utType` に `UTType.jpeg` / `UTType.png` を渡して形式を選ぶ。
+    private func makeSDRImage(_ name: String, type utType: UTType = .jpeg,
+                             orientation: Int = 6) throws -> URL {
+        let w = 256, h = 192
+        let cs = CGColorSpace(name: CGColorSpace.displayP3)!
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            throw XCTSkip("CGContext を作成できません")
+        }
+        // 中間調の背景 + 明るいハイライト（白い円 = 太陽/鏡面反射相当）。
+        ctx.setFillColor(CGColor(colorSpace: cs, components: [0.35, 0.40, 0.45, 1.0])!)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(CGColor(colorSpace: cs, components: [1.0, 1.0, 0.98, 1.0])!)
+        ctx.fillEllipse(in: CGRect(x: 180, y: 120, width: 56, height: 56))
+        guard let cg = ctx.makeImage() else { throw XCTSkip("CGImage を生成できません") }
+
+        let url = tmp.appendingPathComponent(name)
+        guard let dst = CGImageDestinationCreateWithURL(url as CFURL, utType.identifier as CFString, 1, nil) else {
+            throw XCTSkip("画像出力先を作成できません")
+        }
+        var props: [String: Any] = [
+            kCGImagePropertyOrientation as String: orientation,
+            kCGImagePropertyExifDictionary as String: [
+                kCGImagePropertyExifDateTimeOriginal as String: "2026:07:04 12:00:00",
+            ],
+            kCGImagePropertyTIFFDictionary as String: [
+                kCGImagePropertyTIFFMake as String: "GainForgeTest",
+            ],
+        ]
+        if utType == .jpeg { props[kCGImageDestinationLossyCompressionQuality as String] = 0.9 }
+        CGImageDestinationAddImage(dst, cg, props as CFDictionary)
+        guard CGImageDestinationFinalize(dst) else { throw XCTSkip("画像を書き出せません") }
+        return url
+    }
+
+    /// SDR→HDR カーブ変換でゲインマップが埋め込まれ、EXIF/Orientation が保持されること。
+    func testSDRtoHDRCurveEmbedsGainMapAndPreservesMetadata() throws {
+        let input = try makeSDRImage("sdr.jpg", type: .jpeg, orientation: 6)
+        XCTAssertFalse(GainForge.hasGainMap(input), "入力はゲインマップ無しであること")
+
+        let out = tmp.appendingPathComponent("sdr_hdr.heic")
+        let result = try GainForge.convert(input: input, output: out, quality: 0.7,
+                                           force: true, sdrMode: .hdrCurve)
+
+        XCTAssertTrue(result.isHDR, "合成出力は HDR 扱いであること")
+        XCTAssertGreaterThan(result.outputBytes, 0)
+        XCTAssertTrue(GainForge.hasGainMap(out), "SDR→HDR 合成でゲインマップが埋め込まれること")
+        XCTAssertEqual(imageDepth(out), 10, "HDR 合成出力は 10bit（HEVC Main 10）で書き出されること")
+
+        let inP = imageProperties(input)
+        let outP = imageProperties(out)
+        XCTAssertEqual("\(outP[kCGImagePropertyOrientation as String] ?? "")",
+                       "\(inP[kCGImagePropertyOrientation as String] ?? "")",
+                       "Orientation が保持されていること")
+        XCTAssertNotNil(outP[kCGImagePropertyExifDictionary as String], "EXIF が保持されていること")
+    }
+
+    /// `.sdr` 指定ではゲインマップを生成しない（従来の SDR HEIC 経路）。
+    func testSDRModeKeepsSDR() throws {
+        let input = try makeSDRImage("plain.jpg", type: .jpeg, orientation: 1)
+        let out = tmp.appendingPathComponent("plain.heic")
+        let result = try GainForge.convert(input: input, output: out, quality: 0.7,
+                                           force: true, sdrMode: .sdr)
+        XCTAssertFalse(result.isHDR)
+        XCTAssertFalse(GainForge.hasGainMap(out), "SDR 指定ではゲインマップを付けないこと")
+        XCTAssertEqual(imageDepth(out), 8, "SDR 保存は従来どおり 8bit のままであること")
+    }
+
+    /// PNG 入力でも SDR→HDR カーブ変換でゲインマップが埋め込まれること。
+    /// PNG はゲインマップ非対応の素 SDR 画像で、この機能の自然な入力。
+    func testPNGInputToHDRCurveEmbedsGainMap() throws {
+        let input = try makeSDRImage("sdr.png", type: .png, orientation: 1)
+        XCTAssertFalse(GainForge.hasGainMap(input), "PNG 入力はゲインマップ無し")
+
+        let out = tmp.appendingPathComponent("sdr_png.heic")
+        let result = try GainForge.convert(input: input, output: out, quality: 0.7,
+                                           force: true, sdrMode: .hdrCurve)
+        XCTAssertTrue(result.isHDR)
+        XCTAssertTrue(GainForge.hasGainMap(out), "PNG からの SDR→HDR 合成でもゲインマップが埋め込まれること")
+    }
+
+    // MARK: - SDR→HDR 合成（Apple 学習 LUT / .hdrML）
+
+    /// 同梱の学習 LUT が SwiftPM リソース（`Bundle.module`）として解決・検証できること。
+    /// これが false だと `.hdrML` はカーブ法へ降格する（`writeMLExpandedHDRHEIC`）。
+    func testMLGainLUTIsBundledAndValid() {
+        XCTAssertTrue(GainForge.isMLGainLUTAvailable,
+                      "同梱 LUT が Bundle.module から解決でき、サイズ・値の検証を通ること")
+    }
+
+    /// `.hdrML`（Apple 学習 LUT 方式）でもゲインマップが埋め込まれ、10bit で書き出され、
+    /// EXIF/Orientation が保持されること。第3の変換経路の回帰を固定する。
+    func testSDRtoHDRMLEmbedsGainMapAndIs10bit() throws {
+        try XCTSkipUnless(GainForge.isMLGainLUTAvailable, "LUT 未同梱の環境では ML 経路を検証できない")
+
+        let input = try makeSDRImage("sdr_ml.jpg", type: .jpeg, orientation: 6)
+        XCTAssertFalse(GainForge.hasGainMap(input), "入力はゲインマップ無しであること")
+
+        let out = tmp.appendingPathComponent("sdr_ml.heic")
+        let result = try GainForge.convert(input: input, output: out, quality: 0.7,
+                                           force: true, sdrMode: .hdrML)
+
+        XCTAssertTrue(result.isHDR, "ML/LUT 合成出力は HDR 扱いであること")
+        XCTAssertTrue(GainForge.hasGainMap(out), "ML/LUT 合成でゲインマップが埋め込まれること")
+        XCTAssertEqual(imageDepth(out), 10, "ML/LUT 合成出力も 10bit（HEVC Main 10）で書き出されること")
+
+        let inP = imageProperties(input)
+        let outP = imageProperties(out)
+        XCTAssertEqual("\(outP[kCGImagePropertyOrientation as String] ?? "")",
+                       "\(inP[kCGImagePropertyOrientation as String] ?? "")",
+                       "Orientation が保持されていること")
+        XCTAssertNotNil(outP[kCGImagePropertyExifDictionary as String], "EXIF が保持されていること")
     }
 }

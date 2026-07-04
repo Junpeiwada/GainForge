@@ -23,12 +23,19 @@ final class AppViewModel: ObservableObject {
     @Published var customFolder: URL? {
         didSet { defaults.set(customFolder?.path, forKey: Keys.customFolderPath) }
     }
+    /// ゲインマップ無し（SDR）入力の変換方式。HDR 入力（ゲインマップ付き）には影響しない。
+    @Published var sdrMode: SDRConversion {
+        didSet { defaults.set(sdrMode.rawValue, forKey: Keys.sdrMode) }
+    }
 
     // MARK: - 実行状態
     @Published private(set) var isConverting = false
     private var cancelRequested = false
     /// 処理中に計画外の既存ファイルへ衝突し、安全のためバッチを止めたか（完了後の通知に使う）。
     private var haltedByUnexpected = false
+    /// `.hdrML` 選択時に LUT を読めず `.hdrCurve` へ降格した旨を、この起動中に通知済みか
+    /// （降格は全ファイル共通のためバッチのたびに出さず一度だけ知らせる）。
+    private var didNotifyMLFallback = false
 
     // MARK: - probe（読み込みメタ取得）のスロットル
     // 大量フォルダ投入時に画像デコードが一斉起動してメモリ/CPU が跳ねないよう同時数を抑える。
@@ -41,12 +48,15 @@ final class AppViewModel: ObservableObject {
         static let quality = "gf.quality"
         static let outputIsCustom = "gf.outputIsCustom"
         static let customFolderPath = "gf.customFolderPath"
+        static let sdrMode = "gf.sdrMode"
     }
 
     /// 設定の初期値。初回起動時の既定値と「設定リセット」の戻り先を一元管理する。
     enum Defaults {
         static let quality = 0.6
         static let outputMode = OutputMode.sameFolder
+        // 既定は従来挙動（SDR 画像は SDR HEIC で保存）。HDR 補正はユーザーが明示選択する。
+        static let sdrMode = SDRConversion.sdr
     }
 
     /// - Parameter defaults: 設定の永続化先。テストでは専用 suite を注入する。
@@ -55,6 +65,8 @@ final class AppViewModel: ObservableObject {
         let q = defaults.object(forKey: Keys.quality) as? Double
         self.quality = q ?? Defaults.quality
         self.outputMode = defaults.bool(forKey: Keys.outputIsCustom) ? .customFolder : .sameFolder
+        self.sdrMode = defaults.string(forKey: Keys.sdrMode)
+            .flatMap(SDRConversion.init(rawValue:)) ?? Defaults.sdrMode
         // 復元したフォルダが実在しなければ「未選択」に戻す（削除済みパスを使い回さない）。
         if let p = defaults.string(forKey: Keys.customFolderPath) {
             var isDir: ObjCBool = false
@@ -141,20 +153,20 @@ final class AppViewModel: ObservableObject {
     /// フォルダの再帰収集はバックグラウンドで行い、巨大階層でも UI を止めない（M-3）。
     func addDropped(_ urls: [URL]) {
         Task {
-            let jpegs = await Task.detached(priority: .utility) {
-                urls.flatMap { GainForge.collectJPEGs($0) }.map { $0.standardizedFileURL }
+            let images = await Task.detached(priority: .utility) {
+                urls.flatMap { GainForge.collectInputImages($0) }.map { $0.standardizedFileURL }
             }.value
-            mergeNewItems(jpegs)
+            mergeNewItems(images)
         }
     }
 
-    /// 収集済み JPEG URL を重複排除して一覧へ追加する（同期・MainActor）。
+    /// 収集済み入力画像（JPEG / PNG）URL を重複排除して一覧へ追加する（同期・MainActor）。
     /// 戻り値は実際に追加した件数。テストはこの同期 API を直接叩く。
     @discardableResult
-    func mergeNewItems(_ jpegs: [URL]) -> Int {
+    func mergeNewItems(_ images: [URL]) -> Int {
         var seen = Set(items.map { $0.inputURL.standardizedFileURL })
         var added: [FileItem] = []
-        for url in jpegs {
+        for url in images {
             let std = url.standardizedFileURL
             guard seen.insert(std).inserted else { continue }   // 既存・同バッチ内の重複を排除
             added.append(FileItem(inputURL: std))
@@ -243,6 +255,7 @@ final class AppViewModel: ObservableObject {
         quality = Defaults.quality
         outputMode = Defaults.outputMode
         customFolder = nil
+        sdrMode = Defaults.sdrMode
     }
 
     /// 行を更新する小ヘルパ。
@@ -297,11 +310,20 @@ final class AppViewModel: ObservableObject {
             plans.map { ($0.id, (output: $0.output, overwrite: $0.willOverwrite)) })
         let orderedIDs = plans.map { $0.id }
 
+        // ML/LUT 方式を選んでいるのに LUT を読めないと、ゲインマップ無し画像はカーブ法へ降格する。
+        // 実際に降格対象（ゲインマップ無し）を含むバッチを始める時、この起動中一度だけ通知する。
+        if sdrMode == .hdrML, !GainForge.isMLGainLUTAvailable, !didNotifyMLFallback,
+           items.contains(where: { orderedIDs.contains($0.id) && $0.gainMap != .present }) {
+            didNotifyMLFallback = true
+            presentMLFallbackNotice()
+        }
+
         isConverting = true
         cancelRequested = false
         haltedByUnexpected = false
 
         let quality = self.quality
+        let sdrMode = self.sdrMode
 
         // 同時実行数はコア数を基準に上限でクランプする。1 枚のエンコードは ImageIO/CoreImage の
         // ネイティブ呼び出しで途中中断できないため、上限は中止時に待たされる枚数の上限でもある。
@@ -323,7 +345,8 @@ final class AppViewModel: ObservableObject {
                 // 初期ウィンドウを投入。
                 while inFlight < maxConcurrent, next < waitingIDs.count, !cancelRequested {
                     if let op = conversionOperation(for: waitingIDs[next],
-                                                    plan: planByID[waitingIDs[next]], quality: quality) {
+                                                    plan: planByID[waitingIDs[next]],
+                                                    quality: quality, sdrMode: sdrMode) {
                         group.addTask(priority: .userInitiated, operation: op)
                         inFlight += 1
                     }
@@ -337,7 +360,8 @@ final class AppViewModel: ObservableObject {
                     while next < waitingIDs.count, !cancelRequested {
                         let id = waitingIDs[next]
                         next += 1
-                        if let op = conversionOperation(for: id, plan: planByID[id], quality: quality) {
+                        if let op = conversionOperation(for: id, plan: planByID[id],
+                                                        quality: quality, sdrMode: sdrMode) {
                             group.addTask(priority: .userInitiated, operation: op)
                             inFlight += 1
                             break
@@ -364,7 +388,8 @@ final class AppViewModel: ObservableObject {
     private func conversionOperation(
         for id: FileItem.ID,
         plan: (output: URL, overwrite: Bool)?,
-        quality: Double
+        quality: Double,
+        sdrMode: SDRConversion
     ) -> (@Sendable () async -> Void)? {
         guard let plan, let input = items.first(where: { $0.id == id })?.inputURL else { return nil }
 
@@ -381,8 +406,9 @@ final class AppViewModel: ObservableObject {
                     // 出力先フォルダを用意（指定フォルダが無い場合）。
                     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                     // 出力先は事前計画で確定済み。GUI はゲインマップ無しも常に変換（force: true）。
+                    // ゲインマップ無し入力の扱い（SDR 保存 / HDR 補正）は sdrMode に従う。
                     let r = try GainForge.convert(input: input, output: output, quality: quality,
-                                                  force: true, overwrite: overwrite)
+                                                  force: true, overwrite: overwrite, sdrMode: sdrMode)
                     return .success(r)
                 } catch let e as GainForgeError {
                     // 計画外の既存ファイルへの衝突は「中断」扱いにしてバッチを止める。
@@ -448,6 +474,19 @@ final class AppViewModel: ObservableObject {
         case .alertSecondButtonReturn: return .rename
         default:                       return .cancel
         }
+    }
+
+    /// `.hdrML`（ML/LUT）を選んでいるが LUT を読み込めず、明部加重カーブ（`.hdrCurve`）へ
+    /// 自動降格することを知らせる（この起動中一度だけ）。ゲインマップ無し SDR 画像のみに作用し、
+    /// ゲインマップ付き画像（生転写）には影響しない。
+    private func presentMLFallbackNotice() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "HDR補正（ML/LUT）の学習データを読み込めません"
+        alert.informativeText = "ゲインマップの無い SDR 画像は、明部加重カーブ（HDR補正（カーブ））で"
+            + "代替して補正します。ゲインマップ付きの画像には影響しません。"
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// 処理中に計画外の既存ファイルへ衝突してバッチを止めたことを知らせる。

@@ -20,3 +20,9 @@ xcuserdata/
 # Python
 __pycache__/
 *.pyc
+
+# HDR 診断ツールの swiftc コンパイル済みバイナリ（ソース *.swift のみ追跡する）
+Tools/hdr-diagnostics/edr
+Tools/hdr-diagnostics/inspect
+Tools/hdr-diagnostics/gmsample
+Tools/hdr-diagnostics/cmpbase

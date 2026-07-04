@@ -164,9 +164,9 @@ struct EmptyStateView: View {
             Image(systemName: "arrow.down.doc")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("ここに JPEG / フォルダをドラッグ&ドロップ")
+            Text("ここに JPEG / PNG / フォルダをドラッグ&ドロップ")
                 .font(.title3)
-            Text("フォルダ内の *.jpg / *.jpeg を再帰的に読み込みます")
+            Text("フォルダ内の *.jpg / *.jpeg / *.png を再帰的に読み込みます")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

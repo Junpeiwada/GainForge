@@ -16,6 +16,7 @@ var quality = 0.6
 var outDir: String? = nil
 var forceNonHDR = false
 var allowOverwrite = false
+var sdrMode: SDRConversion = .sdr
 var inputs: [String] = []
 
 let argv = CommandLine.arguments
@@ -31,14 +32,24 @@ while argi < argv.count {
         if argi < argv.count { outDir = argv[argi] }
     case "-f":
         forceNonHDR = true
+    case "-x", "--hdr":
+        // ゲインマップ無し画像を SDR→HDR 補正（明部加重カーブ）で変換。指定時は force 相当。
+        sdrMode = .hdrCurve
+        forceNonHDR = true
+    case "-m", "--hdr-ml":
+        // ゲインマップ無し画像を SDR→HDR 補正（Apple 学習の色→ゲイン統計 LUT）で変換。指定時は force 相当。
+        sdrMode = .hdrML
+        forceNonHDR = true
     case "-y", "--overwrite":
         allowOverwrite = true
     case "-h", "--help":
-        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-y] <入力ファイル/フォルダ ...>")
-        print("  -q  HEVC 品質（既定 0.6）")
-        print("  -o  出力フォルダ（省略時は入力と同じ場所に .heic）")
-        print("  -f  ゲインマップ無し画像も SDR HEIC として変換")
-        print("  -y  既存の出力ファイルを上書き（既定はスキップ）")
+        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-x] [-m] [-y] <入力ファイル/フォルダ ...>")
+        print("  -q       HEVC 品質（既定 0.6）")
+        print("  -o       出力フォルダ（省略時は入力と同じ場所に .heic）")
+        print("  -f       ゲインマップ無し画像も SDR HEIC として変換")
+        print("  -x, --hdr     ゲインマップ無し画像を HDR 自動補正（明部加重カーブ）して変換")
+        print("  -m, --hdr-ml  ゲインマップ無し画像を HDR 自動補正（Apple 学習の色→ゲイン LUT）して変換")
+        print("  -y       既存の出力ファイルを上書き（既定はスキップ）")
         exit(0)
     default:
         inputs.append(a)
@@ -51,16 +62,22 @@ if inputs.isEmpty {
     exit(1)
 }
 
-// ---- 入力を JPEG ファイル一覧に展開（フォルダは再帰）----
-let files = inputs.flatMap { GainForge.collectJPEGs(URL(fileURLWithPath: $0)) }
+// ---- 入力を画像ファイル一覧に展開（JPEG / PNG。フォルダは再帰）----
+let files = inputs.flatMap { GainForge.collectInputImages(URL(fileURLWithPath: $0)) }
 if files.isEmpty {
-    errPrint("変換対象の JPEG が見つかりません。")
+    errPrint("変換対象の画像（JPEG / PNG）が見つかりません。")
     exit(1)
 }
 
 // 出力先フォルダの用意
 if let od = outDir {
     try? FileManager.default.createDirectory(atPath: od, withIntermediateDirectories: true)
+}
+
+// ML/LUT 方式（-m）を選んでも学習 LUT を読めない場合はカーブ法（-x 相当）へ降格する。
+// 開始前に一度だけ通知する（降格は全ファイル共通のため 1 回で足りる）。
+if sdrMode == .hdrML, !GainForge.isMLGainLUTAvailable {
+    errPrint("⚠️  ML/LUT 用の学習データを読み込めないため、HDR 補正は明部加重カーブ（-x 相当）で行います。")
 }
 
 // ---- 変換ループ ----
@@ -77,7 +94,8 @@ for inURL in files {
 
     do {
         let result = try GainForge.convert(
-            input: inURL, output: outURL, quality: quality, force: forceNonHDR, overwrite: allowOverwrite
+            input: inURL, output: outURL, quality: quality, force: forceNonHDR,
+            overwrite: allowOverwrite, sdrMode: sdrMode
         )
         let ratio = result.sizeRatio.map { Int(100.0 * $0) } ?? 0
         let tag = result.isHDR ? "HDR" : "SDR"

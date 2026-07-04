@@ -25,6 +25,8 @@ public enum GainForgeError: Error, Sendable {
     case gainMapVerificationFailed(URL)
     /// 出力先に既存ファイルがあり、上書き許可なしで変換しようとした。
     case outputExists(URL)
+    /// SDR→HDR 合成（明部加重ゲイン等）に失敗した。
+    case hdrSynthesisFailed(URL)
 }
 
 extension GainForgeError: LocalizedError {
@@ -50,6 +52,8 @@ extension GainForgeError: LocalizedError {
             return "ゲインマップの埋め込み検算に失敗しました: \(url.lastPathComponent)"
         case .outputExists(let url):
             return "出力先に既存ファイルがあります: \(url.lastPathComponent)"
+        case .hdrSynthesisFailed(let url):
+            return "SDR から HDR への合成に失敗しました: \(url.lastPathComponent)"
         }
     }
 }

@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import GainForgeCore
 @testable import GainForge
 
 @MainActor
@@ -92,11 +93,13 @@ final class AppViewModelTests: XCTestCase {
         let vm1 = makeVM(suiteName: suite)
         vm1.quality = 0.8
         vm1.outputMode = .customFolder
+        vm1.sdrMode = .hdrCurve
 
         // 同じ suite を使う新インスタンスで復元される
         let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
         XCTAssertEqual(vm2.quality, 0.8, accuracy: 0.0001)
         XCTAssertEqual(vm2.outputMode, .customFolder)
+        XCTAssertEqual(vm2.sdrMode, .hdrCurve)
     }
 
     func testCustomFolderRestoreDropsMissingPath() {
@@ -114,17 +117,20 @@ final class AppViewModelTests: XCTestCase {
         vm.quality = 0.95
         vm.outputMode = .customFolder
         vm.customFolder = tmp
+        vm.sdrMode = .hdrCurve
 
         vm.resetSettings()
         XCTAssertEqual(vm.quality, AppViewModel.Defaults.quality, accuracy: 0.0001)
         XCTAssertEqual(vm.outputMode, .sameFolder)
         XCTAssertNil(vm.customFolder)
+        XCTAssertEqual(vm.sdrMode, AppViewModel.Defaults.sdrMode)
 
         // 永続化先もリセットされ、新インスタンスで初期値が復元される
         let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
         XCTAssertEqual(vm2.quality, AppViewModel.Defaults.quality, accuracy: 0.0001)
         XCTAssertEqual(vm2.outputMode, .sameFolder)
         XCTAssertNil(vm2.customFolder)
+        XCTAssertEqual(vm2.sdrMode, AppViewModel.Defaults.sdrMode)
     }
 
     func testCustomFolderRestoreKeepsExistingPath() {

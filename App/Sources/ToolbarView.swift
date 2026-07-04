@@ -1,6 +1,7 @@
 import SwiftUI
+import GainForgeCore
 
-/// 上部ツールバー：品質スライダー、出力先、変換 / 中止、クリア。
+/// 上部ツールバー：品質スライダー、出力先、SDR 画像の扱い、変換 / 中止、クリア。
 struct ToolbarView: View {
     @EnvironmentObject var model: AppViewModel
 
@@ -40,6 +41,23 @@ struct ToolbarView: View {
                         .help(model.customFolder?.path ?? "未選択")
                         .frame(width: 120, alignment: .leading)
                 }
+            }
+            .fixedSize()
+
+            Divider().frame(height: 22)
+
+            // SDR 画像の扱い（ゲインマップ無し入力のみに作用。HDR 入力は常に生転写）。
+            HStack(spacing: 8) {
+                Text("SDR画像")
+                Picker("", selection: $model.sdrMode) {
+                    Text("SDRで保存").tag(SDRConversion.sdr)
+                    Text("HDR補正（カーブ）").tag(SDRConversion.hdrCurve)
+                    Text("HDR補正（ML/LUT）").tag(SDRConversion.hdrML)
+                }
+                .labelsHidden()
+                .frame(width: 170)
+                .disabled(!model.canEditSettings)
+                .help("ゲインマップの無い SDR 画像の変換方法。HDR 補正は明部だけを HDR 領域へ拡張します（ベースの見た目は維持）。カーブは手書きの明部加重、ML/LUT は Apple 写真の実 HDR から学習した色ごとのゲインを使います。ゲインマップ付き画像には影響しません。")
             }
             .fixedSize()
 
