@@ -8,6 +8,9 @@
 <meta property="og:title" content="GainForge">
 <meta property="og:description" content="HDR ゲインマップを保持したまま JPEG → HEIC 変換する macOS アプリ">
 <meta property="og:image" content="https://junpeiwada.github.io/GainForge/screenshot.png">
+<link rel="canonical" href="https://junpeiwada.github.io/GainForge/">
+<link rel="alternate" hreflang="ja" href="https://junpeiwada.github.io/GainForge/">
+<link rel="alternate" hreflang="en" href="https://junpeiwada.github.io/GainForge/">
 <link rel="icon" href="icon.png">
 <style>
   :root{
@@ -23,6 +26,16 @@
   }
   a{color:inherit}
   .wrap{max-width:980px;margin:0 auto;padding:0 24px}
+
+  /* Language switcher */
+  .lang-bar{position:fixed;top:14px;right:18px;z-index:100;display:flex;gap:6px}
+  .lang-btn{
+    background:rgba(23,26,33,.82);border:1px solid var(--line);
+    color:var(--muted);font-size:13px;font-weight:600;padding:5px 12px;
+    border-radius:8px;cursor:pointer;transition:color .12s,border-color .12s;
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  }
+  .lang-btn:hover,.lang-btn.active{color:var(--accent);border-color:var(--accent)}
 
   /* Hero */
   .hero{text-align:center;padding:84px 24px 48px;
@@ -77,65 +90,173 @@
 </head>
 <body>
 
+  <nav class="lang-bar">
+    <button class="lang-btn" id="btn-ja" onclick="setLang('ja')">日本語</button>
+    <button class="lang-btn" id="btn-en" onclick="setLang('en')">English</button>
+  </nav>
+
   <header class="hero">
     <img class="icon" src="icon.png" alt="GainForge">
     <h1>GainForge</h1>
-    <p class="tag">HDR ゲインマップ付き JPEG を、ゲインマップを保持したまま HEIC に変換する macOS アプリ。写真アプリと同じ HDR 構造で書き出します。</p>
+    <p class="tag"
+      data-ja="HDR ゲインマップ付き JPEG を、ゲインマップを保持したまま HEIC に変換する macOS アプリ。写真アプリと同じ HDR 構造で書き出します。"
+      data-en="A macOS app that converts HDR gain map JPEGs to HEIC while preserving the gain map — the same HDR structure as Photos.app exports."
+    ></p>
     <div class="cta">
       <a id="dl" class="btn btn-primary" href="https://github.com/Junpeiwada/GainForge/releases/latest">
-        ⬇︎ ダウンロード <span id="ver"></span>
+        ⬇︎ <span data-ja="ダウンロード" data-en="Download"></span> <span id="ver"></span>
       </a>
-      <a class="btn btn-ghost" href="https://github.com/Junpeiwada/GainForge">GitHub で見る</a>
+      <a class="btn btn-ghost" href="https://github.com/Junpeiwada/GainForge"
+        data-ja="GitHub で見る" data-en="View on GitHub"></a>
     </div>
-    <p class="req"><b>macOS 15 以降</b> ・ Apple 署名 / 公証済み ・ 無料 ・ 自動更新対応</p>
-    <div class="shot"><img src="screenshot.png" alt="GainForge アプリ画面"></div>
+    <p class="req">
+      <b>macOS 15+</b>
+      <span data-ja="・ Apple 署名 / 公証済み ・ 無料 ・ 自動更新対応"
+            data-en="· Apple-signed & notarized · Free · Auto-update supported"></span>
+    </p>
+    <div class="shot"><img src="screenshot.png"
+      data-alt-ja="GainForge アプリ画面"
+      data-alt-en="GainForge app screenshot"></div>
   </header>
 
   <section>
     <div class="wrap">
-      <h2>特長</h2>
-      <p class="sub">写真アプリ書き出しと画素レベルでほぼ一致する HDR 変換</p>
+      <h2 data-ja="特長" data-en="Features"></h2>
+      <p class="sub"
+        data-ja="写真アプリ書き出しと画素レベルでほぼ一致する HDR 変換"
+        data-en="Pixel-accurate HDR conversion, matching Photos.app exports"
+      ></p>
       <div class="grid">
-        <div class="card"><h3>ゲインマップを<span class="em">生転写</span></h3><p>元のカラーゲインマップを Display P3 PQ のまま転写。SDR ベース画像 + ISO ゲインマップで、写真アプリと同じ HDR 構造を保ちます。</p></div>
-        <div class="card"><h3>一括変換</h3><p>JPEG / フォルダをドラッグ&ドロップ。コア数に応じて複数枚を並列変換し、1 件ごとに結果をライブ更新します。</p></div>
-        <div class="card"><h3>比較ビューワ内蔵</h3><p>変換前後を並べて、HDR 表示のまま画質を確認できます。</p></div>
-        <div class="card"><h3>メタデータ保持</h3><p>EXIF / GPS / 向き（Orientation）などの撮影情報を引き継いで書き出します。</p></div>
+        <div class="card">
+          <h3 data-ja="ゲインマップを<span class='em'>生転写</span>"
+              data-en="<span class='em'>Lossless</span> Gain Map Transfer"></h3>
+          <p data-ja="元のカラーゲインマップを Display P3 PQ のまま転写。SDR ベース画像 + ISO ゲインマップで、写真アプリと同じ HDR 構造を保ちます。"
+             data-en="Transfers the original color gain map as-is in Display P3 PQ. Outputs an SDR base image + ISO gain map — the same HDR structure as Photos.app."></p>
+        </div>
+        <div class="card">
+          <h3 data-ja="一括変換" data-en="Batch Conversion"></h3>
+          <p data-ja="JPEG / フォルダをドラッグ&ドロップ。コア数に応じて複数枚を並列変換し、1 件ごとに結果をライブ更新します。"
+             data-en="Drag and drop JPEGs or folders. Converts multiple files in parallel based on CPU cores, updating results live per file."></p>
+        </div>
+        <div class="card">
+          <h3 data-ja="比較ビューワ内蔵" data-en="Built-in Comparison Viewer"></h3>
+          <p data-ja="変換前後を並べて、HDR 表示のまま画質を確認できます。"
+             data-en="Side-by-side before/after comparison with full HDR display."></p>
+        </div>
+        <div class="card">
+          <h3 data-ja="メタデータ保持" data-en="Metadata Preserved"></h3>
+          <p data-ja="EXIF / GPS / 向き（Orientation）などの撮影情報を引き継いで書き出します。"
+             data-en="Retains EXIF, GPS, orientation, and other shooting metadata in the output."></p>
+        </div>
       </div>
-      <div class="center-shot"><img src="viewer.png" alt="比較ビューワ"></div>
+      <div class="center-shot"><img src="viewer.png"
+        data-alt-ja="比較ビューワ"
+        data-alt-en="Comparison viewer"></div>
     </div>
   </section>
 
   <section style="padding-top:0">
     <div class="wrap">
-      <h2>インストール</h2>
-      <p class="sub">ダウンロードして「アプリケーション」に入れるだけ</p>
+      <h2 data-ja="インストール" data-en="Installation"></h2>
+      <p class="sub"
+        data-ja="ダウンロードして「アプリケーション」に入れるだけ"
+        data-en="Download and drop into Applications — that's it"
+      ></p>
       <div class="steps">
-        <div class="step"><div><b>ダウンロード</b><span>上の「ダウンロード」ボタンから zip を入手します。</span></div></div>
-        <div class="step"><div><b>展開</b><span>zip をダブルクリックすると <code>GainForge.app</code> ができます。</span></div></div>
-        <div class="step"><div><b>移動</b><span><code>GainForge.app</code> を「アプリケーション」フォルダにドラッグします。</span></div></div>
-        <div class="step"><div><b>起動</b><span>ダブルクリックで起動。初回に確認が出たら「開く」を押してください（公証済みのため警告ブロックは出ません）。</span></div></div>
+        <div class="step"><div>
+          <b data-ja="ダウンロード" data-en="Download"></b>
+          <span data-ja="上の「ダウンロード」ボタンから zip を入手します。"
+                data-en="Click the Download button above to get the zip file."></span>
+        </div></div>
+        <div class="step"><div>
+          <b data-ja="展開" data-en="Unzip"></b>
+          <span data-ja="zip をダブルクリックすると <code>GainForge.app</code> ができます。"
+                data-en="Double-click the zip to extract <code>GainForge.app</code>."></span>
+        </div></div>
+        <div class="step"><div>
+          <b data-ja="移動" data-en="Move"></b>
+          <span data-ja="<code>GainForge.app</code> を「アプリケーション」フォルダにドラッグします。"
+                data-en="Drag <code>GainForge.app</code> to your Applications folder."></span>
+        </div></div>
+        <div class="step"><div>
+          <b data-ja="起動" data-en="Launch"></b>
+          <span data-ja="ダブルクリックで起動。初回に確認が出たら「開く」を押してください（公証済みのため警告ブロックは出ません）。"
+                data-en="Double-click to launch. If a dialog appears the first time, click Open. (The app is notarized by Apple — no security warning.)"></span>
+        </div></div>
       </div>
     </div>
   </section>
 
   <footer>
-    <p>© Junpei Wada ・ <a href="https://github.com/Junpeiwada/GainForge">GitHub</a> ・ <a href="https://github.com/Junpeiwada/GainForge/releases">リリース一覧</a></p>
-    <p style="margin-top:6px">アプリ内の「GainForge について」から自動更新を確認できます。</p>
+    <p>© Junpei Wada ·
+      <a href="https://github.com/Junpeiwada/GainForge">GitHub</a> ·
+      <a href="https://github.com/Junpeiwada/GainForge/releases"
+        data-ja="リリース一覧" data-en="All releases"></a>
+    </p>
+    <p style="margin-top:6px"
+      data-ja="アプリ内の「GainForge について」から自動更新を確認できます。"
+      data-en="Check for updates in the app via GainForge → About GainForge."></p>
   </footer>
 
   <script>
-    // 最新リリースの .zip を自動取得してダウンロードボタンに設定（常に最新版を1クリックDL）
-    (function(){
-      var REPO='Junpeiwada/GainForge';
-      fetch('https://api.github.com/repos/'+REPO+'/releases/latest')
-        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-        .then(function(d){
-          var zip=(d.assets||[]).find(function(a){return /\.zip$/.test(a.name);});
-          if(zip){ document.getElementById('dl').href=zip.browser_download_url; }
-          var v=document.getElementById('ver'); if(v&&d.tag_name){ v.textContent=d.tag_name; }
-        })
-        .catch(function(){ /* 失敗時は href のフォールバック（releases/latest）のまま */ });
-    })();
+    var REPO = 'Junpeiwada/GainForge';
+
+    // ── i18n ──────────────────────────────────────────────────────────────
+    var STORAGE_KEY = 'gainforge-lang';
+
+    function detectLang() {
+      var saved = localStorage.getItem(STORAGE_KEY);
+      if (saved === 'ja' || saved === 'en') return saved;
+      var nav = navigator.language || navigator.userLanguage || '';
+      return nav.toLowerCase().startsWith('ja') ? 'ja' : 'en';
+    }
+
+    function applyLang(lang) {
+      document.documentElement.lang = lang;
+      localStorage.setItem(STORAGE_KEY, lang);
+
+      // text / innerHTML nodes
+      document.querySelectorAll('[data-ja][data-en]').forEach(function(el) {
+        el.innerHTML = el.getAttribute('data-' + lang);
+      });
+
+      // img alt
+      document.querySelectorAll('[data-alt-ja][data-alt-en]').forEach(function(el) {
+        el.alt = el.getAttribute('data-alt-' + lang);
+      });
+
+      // page title & meta description
+      if (lang === 'en') {
+        document.title = 'GainForge — Convert JPEG with HDR Gain Map to HEIC';
+        var m = document.querySelector('meta[name="description"]');
+        if (m) m.content = 'A free macOS app that converts HDR gain map JPEGs to HEIC while preserving the gain map. Same HDR structure as Photos.app.';
+      } else {
+        document.title = 'GainForge — HDR ゲインマップを保持したまま HEIC 変換';
+        var m = document.querySelector('meta[name="description"]');
+        if (m) m.content = 'HDR ゲインマップ付き JPEG を、ゲインマップを保持したまま HEIC に変換する macOS アプリ。写真アプリと同じ HDR 構造で書き出します。';
+      }
+
+      // active button style
+      document.getElementById('btn-ja').classList.toggle('active', lang === 'ja');
+      document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+    }
+
+    function setLang(lang) {
+      applyLang(lang);
+    }
+
+    applyLang(detectLang());
+
+    // ── GitHub release ────────────────────────────────────────────────────
+    fetch('https://api.github.com/repos/' + REPO + '/releases/latest')
+      .then(function(r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function(d) {
+        var zip = (d.assets || []).find(function(a) { return /\.zip$/.test(a.name); });
+        if (zip) { document.getElementById('dl').href = zip.browser_download_url; }
+        var v = document.getElementById('ver');
+        if (v && d.tag_name) { v.textContent = d.tag_name; }
+      })
+      .catch(function() { /* フォールバック: releases/latest のまま */ });
   </script>
 
 </body>
