@@ -50,6 +50,9 @@ public enum GainForge {
     ///     HDR ゲインマップを合成する（`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC）。`.hdrML` は
     ///     同梱 LUT を読めないとき `.hdrCurve` へ自動降格する（可否は `isMLGainLUTAvailable`）。
     ///     ゲインマップ付き入力（HDR）はこの設定に関わらず常に生転写される。
+    ///   - resize: 書き出し時のリサイズ方式（既定 `.original` はリサイズなし）。アスペクト比を維持し
+    ///     **縮小のみ**行う（原寸超えは原寸のまま）。全経路（生転写 / SDR / 合成）へ共通に効き、
+    ///     再サンプルは `CILanczosScaleTransform`（最高品質）で行う。生転写ではゲインマップも同率で縮小。
     /// - Returns: 変換結果（サイズ・HDR 種別）。`isHDR` は「出力がゲインマップを持つか」を表す
     ///   （`.hdrCurve` / `.hdrML` で合成した出力も true）。
     @discardableResult
@@ -60,7 +63,8 @@ public enum GainForge {
         gainScale: Double = 1.0,
         force: Bool = false,
         overwrite: Bool = false,
-        sdrMode: SDRConversion = .sdr
+        sdrMode: SDRConversion = .sdr,
+        resize: ResizeMode = .original
     ) throws -> ConversionResult {
         let q = max(0.0, min(1.0, quality))
         let inputHasGainMap = hasGainMap(input)
@@ -69,18 +73,18 @@ public enum GainForge {
 
         if inputHasGainMap {
             try ensureWritable(output, overwrite: overwrite)
-            try writeGainMapHEIC(input: input, output: output, quality: q, gainScale: gainScale)
+            try writeGainMapHEIC(input: input, output: output, quality: q, gainScale: gainScale, resize: resize)
         } else {
             guard force else { throw GainForgeError.noGainMap(input) }
             try ensureWritable(output, overwrite: overwrite)
             switch sdrMode {
             case .sdr:
-                try writeSDRHEIC(input: input, output: output, quality: q)
+                try writeSDRHEIC(input: input, output: output, quality: q, resize: resize)
             case .hdrCurve:
-                try writeExpandedHDRHEIC(input: input, output: output, quality: q)
+                try writeExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize)
                 outputIsHDR = true
             case .hdrML:
-                try writeMLExpandedHDRHEIC(input: input, output: output, quality: q)
+                try writeMLExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize)
                 outputIsHDR = true
             }
         }
@@ -102,7 +106,8 @@ public enum GainForge {
         input: URL,
         output: URL,
         quality: Double,
-        gainScale: Double
+        gainScale: Double,
+        resize: ResizeMode
     ) throws {
         guard let src = CGImageSourceCreateWithURL(input as CFURL, nil) else {
             throw GainForgeError.cannotReadSource(input)
@@ -119,12 +124,28 @@ public enum GainForge {
         let gainCS = gainCSValue as! CGColorSpace
         let origMeta = origAux[kCGImageAuxiliaryDataInfoMetadata as String]
 
+        // ベース SDR 画像を先にデコードする（寸法をリサイズ計画の基準に使うため）。
+        guard let baseCG = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            throw GainForgeError.baseImageUnreadable
+        }
+
+        // リサイズ計画（縮小のみ）。ベースを縮小するとき、ゲインマップも同率で縮小して
+        // ベースとの相対比を保つ（ISO ゲインマップは相対寸法でベースに対応するため）。
+        // 基準寸法は baseCG の実ピクセル寸法（プロパティ辞書に依存せず確実に取れる）。
+        let baseSize = CGSize(width: baseCG.width, height: baseCG.height)
+        let resizeTarget = ResizePlanner.targetSize(original: baseSize, mode: resize)
+        let baseScale: CGFloat = resizeTarget.map { $0.width / baseSize.width } ?? 1.0
+
         // 2. ゲインマップをカラー CIImage として読む。
         guard var gainCI = CIImage(contentsOf: input, options: [.auxiliaryHDRGainMap: true]) else {
             throw GainForgeError.gainMapImageUnreadable
         }
-        if gainScale != 1.0 {
-            gainCI = gainCI.transformed(by: CGAffineTransform(scaleX: gainScale, y: gainScale))
+        // 明示 gainScale（ゲインマップ寸法の任意縮小・CLI/GUI 非公開で現状 1.0）× リサイズによる
+        // 同率縮小 baseScale。ゲインマップもベースと同じ Lanczos で縮小し、リサンプル品質を揃える
+        // （アフィン変換のバイリニアだと明部にジャギー/ハローが乗るため）。両者を掛けて 1 度で適用する。
+        let effectiveGainScale = gainScale * Double(baseScale)
+        if effectiveGainScale != 1.0 {
+            gainCI = lanczosResized(gainCI, scale: CGFloat(effectiveGainScale))
         }
 
         // 3. ゲインマップ本来の ColorSpace（典型: Display P3 PQ）で BGRA8 に焼く。
@@ -157,9 +178,8 @@ public enum GainForge {
         if let meta = origMeta { aux[kCGImageAuxiliaryDataInfoMetadata as String] = meta }
 
         // 5. ベース SDR + ゲインマップを HEIC として書き出す。
-        guard let baseCG = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            throw GainForgeError.baseImageUnreadable
-        }
+        //    リサイズ指定があればベースを Lanczos で縮小する（ゲインマップは上で同率縮小済み）。
+        let baseImage = resizeTarget != nil ? try resizedCGImage(baseCG, target: resizeTarget!) : baseCG
         guard let dst = CGImageDestinationCreateWithURL(output as CFURL, UTType.heic.identifier as CFString, 1, nil) else {
             throw GainForgeError.destinationCreateFailed(output)
         }
@@ -167,8 +187,10 @@ public enum GainForge {
         // CGImage 単体はピクセルのみで属性を持たないため、ここでプロパティ辞書を
         // 明示的に渡さないと全メタデータが失われる（Orientation も失われ表示が回転し得る）。
         var baseProps = (CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any]) ?? [:]
+        // 縮小時は EXIF 等に残る旧ピクセル寸法を除去する（実寸と食い違わせない）。
+        if resizeTarget != nil { baseProps = strippingPixelDimensions(baseProps) }
         baseProps[kCGImageDestinationLossyCompressionQuality as String] = quality
-        CGImageDestinationAddImage(dst, baseCG, baseProps as CFDictionary)
+        CGImageDestinationAddImage(dst, baseImage, baseProps as CFDictionary)
         CGImageDestinationAddAuxiliaryDataInfo(dst, kCGImageAuxiliaryDataTypeISOGainMap, aux as CFDictionary)
         guard CGImageDestinationFinalize(dst) else {
             throw GainForgeError.finalizeFailed(output)
@@ -186,10 +208,15 @@ public enum GainForge {
     ///
     /// 元画像の EXIF/GPS/TIFF/IPTC/Orientation 等を引き継ぐため、ImageIO 経路で
     /// プロパティ辞書を明示的に渡す（gain-map 経路と挙動を揃える）。
-    private static func writeSDRHEIC(input: URL, output: URL, quality: Double) throws {
+    private static func writeSDRHEIC(input: URL, output: URL, quality: Double, resize: ResizeMode) throws {
         guard let src = CGImageSourceCreateWithURL(input as CFURL, nil),
-              let sdr = CIImage(contentsOf: input) else {
+              var sdr = CIImage(contentsOf: input) else {
             throw GainForgeError.cannotReadSource(input)
+        }
+        // リサイズ指定があれば Lanczos で縮小する（縮小のみ・アスペクト維持）。
+        let resizeTarget = ResizePlanner.targetSize(original: sdr.extent.size, mode: resize)
+        if let resizeTarget {
+            sdr = lanczosResized(sdr, scale: resizeTarget.width / sdr.extent.width)
         }
         let ctx = CIContext(options: nil)
         let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
@@ -203,6 +230,8 @@ public enum GainForge {
         // PNG 入力の AI 生成タグ（ComfyUI "prompt" / AnimeForge "animeforge" 等）を
         // EXIF UserComment として引き継ぐ（無ければ無変換）。
         props = PNGTextMetadata.merging(props, from: input)
+        // 縮小時は EXIF 等に残る旧ピクセル寸法を除去する（実寸と食い違わせない）。
+        if resizeTarget != nil { props = strippingPixelDimensions(props) }
         props[kCGImageDestinationLossyCompressionQuality as String] = quality
         CGImageDestinationAddImage(dst, cg, props as CFDictionary)
         guard CGImageDestinationFinalize(dst) else {
@@ -230,17 +259,26 @@ public enum GainForge {
     ///    （落とし穴7: メタデータ欠落と回転を防ぐ）。ベースの色は Display P3（PQ ではない）。
     /// 4. 書き出し後に `hasGainMap` で検算する（落とし穴6）。
     private static func writeSynthesizedHDRHEIC(
-        input: URL, output: URL, quality: Double,
+        input: URL, output: URL, quality: Double, resize: ResizeMode,
         synthesize: (_ sdr: CIImage, _ context: CIContext, _ input: URL) throws -> CIImage
     ) throws {
         guard let src = CGImageSourceCreateWithURL(input as CFURL, nil),
-              let sdr = CIImage(contentsOf: input) else {
+              var sdr = CIImage(contentsOf: input) else {
             throw GainForgeError.cannotReadSource(input)
         }
         var origProps = (CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any]) ?? [:]
         // PNG 入力の AI 生成タグ（ComfyUI "prompt" / AnimeForge "animeforge" 等）を
         // EXIF UserComment として引き継ぐ（無ければ無変換）。
         origProps = PNGTextMetadata.merging(origProps, from: input)
+
+        // リサイズ指定があれば合成前に SDR を Lanczos で縮小する。合成 HDR もベースも
+        // 縮小後の SDR から作られるため、ゲインマップとベースは自動的に整合する。
+        let resizeTarget = ResizePlanner.targetSize(original: sdr.extent.size, mode: resize)
+        if let resizeTarget {
+            sdr = lanczosResized(sdr, scale: resizeTarget.width / sdr.extent.width)
+            // 縮小時は EXIF 等に残る旧ピクセル寸法を除去する（実寸と食い違わせない）。
+            origProps = strippingPixelDimensions(origProps)
+        }
 
         // リニア（拡張）Display P3 を作業空間にし、明部ゲインをリニア光で計算する。
         let workingCS = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)!
@@ -271,8 +309,8 @@ public enum GainForge {
     }
 
     /// `.hdrCurve`: 明部加重の逆トーンマッピング（手書きカーブ）でゲインを合成して書き出す。
-    private static func writeExpandedHDRHEIC(input: URL, output: URL, quality: Double) throws {
-        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality,
+    private static func writeExpandedHDRHEIC(input: URL, output: URL, quality: Double, resize: ResizeMode) throws {
+        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality, resize: resize,
                                     synthesize: makeHighlightExpandedHDR)
     }
 
@@ -281,8 +319,8 @@ public enum GainForge {
     /// LUT がロード/検証できないとき（リソース同梱ミス・破損など）は `.hdrCurve`（明部加重カーブ）
     /// へ自動降格する。環境依存の失敗でバッチ全体をエラーにしないための安全弁
     /// （[Docs/SDRのHDR化手法の研究.md] §7 の降格方針に一致）。降格しても出力はゲインマップ付き HDR。
-    private static func writeMLExpandedHDRHEIC(input: URL, output: URL, quality: Double) throws {
-        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality) { sdr, context, input in
+    private static func writeMLExpandedHDRHEIC(input: URL, output: URL, quality: Double, resize: ResizeMode) throws {
+        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality, resize: resize) { sdr, context, input in
             guard let lutData = gainLUTData else {
                 return try makeHighlightExpandedHDR(sdr, context: context, input: input)
             }
@@ -459,6 +497,56 @@ public enum GainForge {
         guard edge1 > edge0 else { return x < edge0 ? 0 : 1 }
         let t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
         return t * t * (3.0 - 2.0 * t)
+    }
+
+    // MARK: - リサイズ（高品質リサンプル）
+
+    /// CIImage をリサンプルする際の共有コンテキスト（色管理は既定＝リニア空間で高品質に補間）。
+    /// 変換ごとに CIContext を作らず一度だけ生成する（バッチで枚数分の無駄を避ける）。
+    private static let resizeContext = CIContext(options: nil)
+
+    /// `CILanczosScaleTransform`（Core Image 最高品質のリサンプラ）で等方スケールした CIImage を返す。
+    /// アスペクト比は変えない（`inputAspectRatio` = 1.0）。フィルタ生成に失敗したときはアフィン変換で代替。
+    private static func lanczosResized(_ image: CIImage, scale: CGFloat) -> CIImage {
+        guard scale != 1.0, let f = CIFilter(name: "CILanczosScaleTransform") else {
+            return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+        f.setValue(image, forKey: kCIInputImageKey)
+        f.setValue(scale, forKey: kCIInputScaleKey)
+        f.setValue(1.0, forKey: kCIInputAspectRatioKey)
+        return f.outputImage ?? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    }
+
+    /// CGImage を Lanczos で目標サイズへ縮小した CGImage を返す（色空間は元画像のまま維持）。
+    /// 生転写のベース画像用。ImageIO の 8bit ベースなので `.RGBA8` で描画する。
+    ///
+    /// 描画範囲は `target` 矩形ではなく **Lanczos 出力の実 extent** を使う。幅由来のスカラーで
+    /// 縮小した像を、高さを独立に丸めた `target` で切り出すと 1px 未満のクロップ/パッドで
+    /// SDR・合成経路（`sdr.extent` から描画）と挙動がずれるため、スケール後の実寸で揃える。
+    private static func resizedCGImage(_ cg: CGImage, target: CGSize) throws -> CGImage {
+        let ci = CIImage(cgImage: cg)
+        let scaled = lanczosResized(ci, scale: target.width / CGFloat(cg.width))
+        let cs = cg.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        let rect = scaled.extent.integral
+        guard !rect.isEmpty, !rect.isInfinite,
+              let out = resizeContext.createCGImage(scaled, from: rect, format: .RGBA8, colorSpace: cs) else {
+            throw GainForgeError.baseImageUnreadable
+        }
+        return out
+    }
+
+    /// メタデータ辞書から旧ピクセル寸法キー（トップレベル + EXIF PixelX/YDimension）を除去する。
+    /// リサイズ後に旧寸法が EXIF へ残ると一部ビューアが誤った寸法を表示するため、縮小時のみ通す。
+    private static func strippingPixelDimensions(_ props: [String: Any]) -> [String: Any] {
+        var p = props
+        p.removeValue(forKey: kCGImagePropertyPixelWidth as String)
+        p.removeValue(forKey: kCGImagePropertyPixelHeight as String)
+        if var exif = p[kCGImagePropertyExifDictionary as String] as? [String: Any] {
+            exif.removeValue(forKey: kCGImagePropertyExifPixelXDimension as String)
+            exif.removeValue(forKey: kCGImagePropertyExifPixelYDimension as String)
+            p[kCGImagePropertyExifDictionary as String] = exif
+        }
+        return p
     }
 
     // MARK: - ユーティリティ

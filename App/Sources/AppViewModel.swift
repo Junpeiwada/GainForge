@@ -28,6 +28,32 @@ final class AppViewModel: ObservableObject {
         didSet { defaults.set(sdrMode.rawValue, forKey: Keys.sdrMode) }
     }
 
+    // MARK: - リサイズ設定
+    // 方式（種別）と各方式の数値を別々に保持・永続化する。方式を切り替えても各値を覚えておき、
+    // 変換時に `resizeMode`（ResizeMode）へ組み立てる。全経路で縮小のみ・アスペクト維持。
+    @Published var resizeKind: ResizeKind {
+        didSet { defaults.set(resizeKind.rawValue, forKey: Keys.resizeKind) }
+    }
+    @Published var resizeMegapixels: Double {
+        didSet { defaults.set(resizeMegapixels, forKey: Keys.resizeMegapixels) }
+    }
+    @Published var resizeWidth: Int {
+        didSet { defaults.set(resizeWidth, forKey: Keys.resizeWidth) }
+    }
+    @Published var resizeHeight: Int {
+        didSet { defaults.set(resizeHeight, forKey: Keys.resizeHeight) }
+    }
+
+    /// UI の種別＋数値から Core の `ResizeMode` を組み立てる（変換時に参照）。
+    var resizeMode: ResizeMode {
+        switch resizeKind {
+        case .original:   return .original
+        case .megapixels: return .megapixels(resizeMegapixels)
+        case .width:      return .fitWidth(resizeWidth)
+        case .height:     return .fitHeight(resizeHeight)
+        }
+    }
+
     // MARK: - 実行状態
     @Published private(set) var isConverting = false
     private var cancelRequested = false
@@ -49,6 +75,10 @@ final class AppViewModel: ObservableObject {
         static let outputIsCustom = "gf.outputIsCustom"
         static let customFolderPath = "gf.customFolderPath"
         static let sdrMode = "gf.sdrMode"
+        static let resizeKind = "gf.resizeKind"
+        static let resizeMegapixels = "gf.resizeMegapixels"
+        static let resizeWidth = "gf.resizeWidth"
+        static let resizeHeight = "gf.resizeHeight"
     }
 
     /// 設定の初期値。初回起動時の既定値と「設定リセット」の戻り先を一元管理する。
@@ -57,6 +87,11 @@ final class AppViewModel: ObservableObject {
         static let outputMode = OutputMode.sameFolder
         // 既定は従来挙動（SDR 画像は SDR HEIC で保存）。HDR 補正はユーザーが明示選択する。
         static let sdrMode = SDRConversion.sdr
+        // 既定はリサイズなし。各方式の初期値は一般的な値（切替時に個別に覚える）。
+        static let resizeKind = ResizeKind.original
+        static let resizeMegapixels = 8.0
+        static let resizeWidth = 3840
+        static let resizeHeight = 2160
     }
 
     /// - Parameter defaults: 設定の永続化先。テストでは専用 suite を注入する。
@@ -67,6 +102,11 @@ final class AppViewModel: ObservableObject {
         self.outputMode = defaults.bool(forKey: Keys.outputIsCustom) ? .customFolder : .sameFolder
         self.sdrMode = defaults.string(forKey: Keys.sdrMode)
             .flatMap(SDRConversion.init(rawValue:)) ?? Defaults.sdrMode
+        self.resizeKind = defaults.string(forKey: Keys.resizeKind)
+            .flatMap(ResizeKind.init(rawValue:)) ?? Defaults.resizeKind
+        self.resizeMegapixels = (defaults.object(forKey: Keys.resizeMegapixels) as? Double) ?? Defaults.resizeMegapixels
+        self.resizeWidth = (defaults.object(forKey: Keys.resizeWidth) as? Int) ?? Defaults.resizeWidth
+        self.resizeHeight = (defaults.object(forKey: Keys.resizeHeight) as? Int) ?? Defaults.resizeHeight
         // 復元したフォルダが実在しなければ「未選択」に戻す（削除済みパスを使い回さない）。
         if let p = defaults.string(forKey: Keys.customFolderPath) {
             var isDir: ObjCBool = false
@@ -256,6 +296,10 @@ final class AppViewModel: ObservableObject {
         outputMode = Defaults.outputMode
         customFolder = nil
         sdrMode = Defaults.sdrMode
+        resizeKind = Defaults.resizeKind
+        resizeMegapixels = Defaults.resizeMegapixels
+        resizeWidth = Defaults.resizeWidth
+        resizeHeight = Defaults.resizeHeight
     }
 
     /// 行を更新する小ヘルパ。
@@ -324,6 +368,7 @@ final class AppViewModel: ObservableObject {
 
         let quality = self.quality
         let sdrMode = self.sdrMode
+        let resize = self.resizeMode
 
         // 同時実行数はコア数を基準に上限でクランプする。1 枚のエンコードは ImageIO/CoreImage の
         // ネイティブ呼び出しで途中中断できないため、上限は中止時に待たされる枚数の上限でもある。
@@ -346,7 +391,7 @@ final class AppViewModel: ObservableObject {
                 while inFlight < maxConcurrent, next < waitingIDs.count, !cancelRequested {
                     if let op = conversionOperation(for: waitingIDs[next],
                                                     plan: planByID[waitingIDs[next]],
-                                                    quality: quality, sdrMode: sdrMode) {
+                                                    quality: quality, sdrMode: sdrMode, resize: resize) {
                         group.addTask(priority: .userInitiated, operation: op)
                         inFlight += 1
                     }
@@ -361,7 +406,7 @@ final class AppViewModel: ObservableObject {
                         let id = waitingIDs[next]
                         next += 1
                         if let op = conversionOperation(for: id, plan: planByID[id],
-                                                        quality: quality, sdrMode: sdrMode) {
+                                                        quality: quality, sdrMode: sdrMode, resize: resize) {
                             group.addTask(priority: .userInitiated, operation: op)
                             inFlight += 1
                             break
@@ -389,7 +434,8 @@ final class AppViewModel: ObservableObject {
         for id: FileItem.ID,
         plan: (output: URL, overwrite: Bool)?,
         quality: Double,
-        sdrMode: SDRConversion
+        sdrMode: SDRConversion,
+        resize: ResizeMode
     ) -> (@Sendable () async -> Void)? {
         guard let plan, let input = items.first(where: { $0.id == id })?.inputURL else { return nil }
 
@@ -408,7 +454,8 @@ final class AppViewModel: ObservableObject {
                     // 出力先は事前計画で確定済み。GUI はゲインマップ無しも常に変換（force: true）。
                     // ゲインマップ無し入力の扱い（SDR 保存 / HDR 補正）は sdrMode に従う。
                     let r = try GainForge.convert(input: input, output: output, quality: quality,
-                                                  force: true, overwrite: overwrite, sdrMode: sdrMode)
+                                                  force: true, overwrite: overwrite, sdrMode: sdrMode,
+                                                  resize: resize)
                     return .success(r)
                 } catch let e as GainForgeError {
                     // 計画外の既存ファイルへの衝突は「中断」扱いにしてバッチを止める。

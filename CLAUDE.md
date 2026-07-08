@@ -29,7 +29,9 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 
 ### Core の中核 API（[Sources/GainForgeCore/GainForge.swift](Sources/GainForgeCore/GainForge.swift)）
 
-`enum GainForge` 名前空間の static メソッド群。`convert(input:output:quality:gainScale:force:overwrite:sdrMode:)` が起点で、ゲインマップ**有り**は常に `writeGainMapHEIC`（生転写）。ゲインマップ**無し**は `sdrMode` で分岐: `.sdr` → `writeSDRHEIC`（従来 8bit）/ `.hdrCurve` → `writeExpandedHDRHEIC`（明部加重の逆トーンマッピングで合成）/ `.hdrML` → `writeMLExpandedHDRHEIC`（Apple 学習の色→ゲイン統計 LUT で合成。同梱 LUT を読めないときは `.hdrCurve` へ自動降格し、CLI/GUI がその旨をユーザーへ通知する）。`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC。`isMLGainLUTAvailable` で LUT の可否を公開する。エラーは型付き `GainForgeError`（`LocalizedError` 準拠で日本語メッセージ）。
+`enum GainForge` 名前空間の static メソッド群。`convert(input:output:quality:gainScale:force:overwrite:sdrMode:resize:)` が起点で、ゲインマップ**有り**は常に `writeGainMapHEIC`（生転写）。ゲインマップ**無し**は `sdrMode` で分岐: `.sdr` → `writeSDRHEIC`（従来 8bit）/ `.hdrCurve` → `writeExpandedHDRHEIC`（明部加重の逆トーンマッピングで合成）/ `.hdrML` → `writeMLExpandedHDRHEIC`（Apple 学習の色→ゲイン統計 LUT で合成。同梱 LUT を読めないときは `.hdrCurve` へ自動降格し、CLI/GUI がその旨をユーザーへ通知する）。`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC。`isMLGainLUTAvailable` で LUT の可否を公開する。エラーは型付き `GainForgeError`（`LocalizedError` 準拠で日本語メッセージ）。
+
+**リサイズ（`resize:` / [ResizeMode.swift](Sources/GainForgeCore/ResizeMode.swift)）**: 書き出し時に全経路共通で縮小できる。`ResizeMode` は `.original`（既定・リサイズなし）/ `.megapixels(Double)`（総画素数）/ `.fitWidth(Int)` / `.fitHeight(Int)`。**アスペクト比は常に維持・縮小のみ**（原寸超え指定は原寸のまま）。目標寸法／スケール率は純粋ロジック `ResizePlanner`（UI 非依存・テスト可能）が計算し、`.original`（または縮小にならないとき）は `nil` を返して現行の等倍経路をそのまま通す（生転写の画素一致保証を壊さない）。再サンプルは `CILanczosScaleTransform`（最高品質）で統一。**生転写ではベースとゲインマップをともに Lanczos で同率縮小**して相対比を保つ（`gainScale × baseScale`。基準寸法は `baseCG` の実ピクセル寸法）。合成経路は合成前に SDR を縮小するのでベースとゲインマップが自動整合。出力寸法は HEVC 4:2:0 の奇数アーティファクト回避のため**偶数へ丸める**。縮小時は EXIF 等の旧ピクセル寸法キーを除去する。UI は種別 `ResizeKind`（値なし・`ResizeMode` と 1:1）と各数値を別々に永続化して組み立てる。
 
 ### GUI の状態管理（[App/Sources/AppViewModel.swift](App/Sources/AppViewModel.swift)）
 
@@ -38,7 +40,7 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 - **並列変換** はスライディングウィンドウ方式（`maxConcurrent` ≈ コア数、上限 3）。1 件完了ごとに該当行をライブ更新。中止要求後は新規投入を止め、実行中の 1 件は完走させる。
 - **出力先の事前計画** は純粋ロジック `OutputPlanner`（[App/Sources/Models.swift](App/Sources/Models.swift)）に分離。バッチ内衝突は連番で必ず回避し、ディスク上の既存ファイルは上書き確認ダイアログで解決する。`ExistingOutputFinder` も同様に UI 非依存でテスト可能。
 - Task 境界を越える値は Sendable に限定（エラーは文字列に畳む `ConversionOutcome`、NSImage は生成直後の未共有インスタンスのみ `@unchecked Sendable` で一度だけ受け渡す）。
-- 設定（品質・出力先・SDR画像の扱い `sdrMode`）は `UserDefaults` に永続化（`didSet` 経由）。ツールバーの「SDR画像」ポップアップが `sdrMode` を束縛する。
+- 設定（品質・出力先・SDR画像の扱い `sdrMode`・リサイズ）は `UserDefaults` に永続化（`didSet` 経由）。ツールバーの「SDR画像」ポップアップが `sdrMode` を束縛する。リサイズは種別 `resizeKind` と各方式の数値（`resizeMegapixels` / `resizeWidth` / `resizeHeight`）を別々に持ち、`resizeMode` computed が `ResizeMode` を組み立てる（方式を切り替えても各値を保持）。ツールバーの「サイズ」ポップアップ＋数値フィールド（プリセット⌄付き）が束縛する。
 
 ## 変換ロジックの「落とし穴」（移植元で実証済み・必ず維持）
 
@@ -84,7 +86,7 @@ swift test                             # Core のユニットテスト
 swift test --filter GainForgeCoreTests/<テストメソッド名>   # 単一テスト
 ```
 
-CLI オプション: `-q 0.0-1.0`（品質、既定 0.6）/ `-o 出力先` / `-f`（ゲインマップ無しも SDR HEIC 化）/ `-y`（既存上書き）/ `-h`。
+CLI オプション: `-q 0.0-1.0`（品質、既定 0.6）/ `-o 出力先` / `-f`（ゲインマップ無しも SDR HEIC 化）/ `-y`（既存上書き）/ `--mpix N`・`-w px`・`--height px`（アスペクト維持で縮小、最後の指定が有効）/ `-h`。
 
 ### GUI（Xcode）
 

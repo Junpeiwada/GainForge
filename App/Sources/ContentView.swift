@@ -13,6 +13,9 @@ struct ContentView: View {
                 viewer.display(item)
             }
             Divider()
+            // 実行ボタン（変換 / クリア）は画面下端・ステータスバーの直上に固定表示する。
+            FooterBarView()
+            Divider()
             StatusBarView()
         }
         // 削除 / クリアで表示中の行が消えたら比較ビューワを空にする。

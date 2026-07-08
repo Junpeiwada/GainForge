@@ -94,12 +94,37 @@ final class AppViewModelTests: XCTestCase {
         vm1.quality = 0.8
         vm1.outputMode = .customFolder
         vm1.sdrMode = .hdrCurve
+        vm1.resizeKind = .width
+        vm1.resizeWidth = 2560
+        vm1.resizeMegapixels = 12
+        vm1.resizeHeight = 1440
 
         // 同じ suite を使う新インスタンスで復元される
         let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
         XCTAssertEqual(vm2.quality, 0.8, accuracy: 0.0001)
         XCTAssertEqual(vm2.outputMode, .customFolder)
         XCTAssertEqual(vm2.sdrMode, .hdrCurve)
+        XCTAssertEqual(vm2.resizeKind, .width)
+        XCTAssertEqual(vm2.resizeWidth, 2560)
+        XCTAssertEqual(vm2.resizeMegapixels, 12, accuracy: 0.0001)
+        XCTAssertEqual(vm2.resizeHeight, 1440)
+    }
+
+    /// `resizeKind` と各数値から Core の `ResizeMode` を正しく組み立てること。
+    func testResizeModeConstruction() {
+        let vm = makeVM()
+        vm.resizeMegapixels = 8
+        vm.resizeWidth = 3840
+        vm.resizeHeight = 2160
+
+        vm.resizeKind = .original
+        XCTAssertEqual(vm.resizeMode, .original)
+        vm.resizeKind = .megapixels
+        XCTAssertEqual(vm.resizeMode, .megapixels(8))
+        vm.resizeKind = .width
+        XCTAssertEqual(vm.resizeMode, .fitWidth(3840))
+        vm.resizeKind = .height
+        XCTAssertEqual(vm.resizeMode, .fitHeight(2160))
     }
 
     func testCustomFolderRestoreDropsMissingPath() {
@@ -118,12 +143,16 @@ final class AppViewModelTests: XCTestCase {
         vm.outputMode = .customFolder
         vm.customFolder = tmp
         vm.sdrMode = .hdrCurve
+        vm.resizeKind = .megapixels
+        vm.resizeMegapixels = 24
 
         vm.resetSettings()
         XCTAssertEqual(vm.quality, AppViewModel.Defaults.quality, accuracy: 0.0001)
         XCTAssertEqual(vm.outputMode, .sameFolder)
         XCTAssertNil(vm.customFolder)
         XCTAssertEqual(vm.sdrMode, AppViewModel.Defaults.sdrMode)
+        XCTAssertEqual(vm.resizeKind, AppViewModel.Defaults.resizeKind)
+        XCTAssertEqual(vm.resizeMegapixels, AppViewModel.Defaults.resizeMegapixels, accuracy: 0.0001)
 
         // 永続化先もリセットされ、新インスタンスで初期値が復元される
         let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)

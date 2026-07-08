@@ -22,7 +22,7 @@ struct GainForgeApp: App {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(viewer)
-                .frame(minWidth: 720, minHeight: 460)
+                .frame(minWidth: 500, minHeight: 460)
                 .background(WindowFrameAutosave(name: Self.frameAutosaveName))
                 .background(MainWindowTerminator())
         }

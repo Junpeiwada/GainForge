@@ -17,6 +17,7 @@ var outDir: String? = nil
 var forceNonHDR = false
 var allowOverwrite = false
 var sdrMode: SDRConversion = .sdr
+var resize: ResizeMode = .original
 var inputs: [String] = []
 
 let argv = CommandLine.arguments
@@ -42,14 +43,30 @@ while argi < argv.count {
         forceNonHDR = true
     case "-y", "--overwrite":
         allowOverwrite = true
+    case "--mpix":
+        // アスペクト維持で総画素数（百万画素）を指定。縮小のみ。
+        argi += 1
+        if argi < argv.count, let mp = Double(argv[argi]), mp > 0 { resize = .megapixels(mp) }
+    case "-w", "--width":
+        // アスペクト維持で横幅（px）を指定。縮小のみ。
+        argi += 1
+        if argi < argv.count, let px = Int(argv[argi]), px > 0 { resize = .fitWidth(px) }
+    case "--height":
+        // アスペクト維持で縦幅（px）を指定。縮小のみ。
+        argi += 1
+        if argi < argv.count, let px = Int(argv[argi]), px > 0 { resize = .fitHeight(px) }
     case "-h", "--help":
-        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-x] [-m] [-y] <入力ファイル/フォルダ ...>")
+        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-x] [-m] [-y] [--mpix N | -w px | --height px] <入力ファイル/フォルダ ...>")
         print("  -q       HEVC 品質（既定 0.6）")
         print("  -o       出力フォルダ（省略時は入力と同じ場所に .heic）")
         print("  -f       ゲインマップ無し画像も SDR HEIC として変換")
         print("  -x, --hdr     ゲインマップ無し画像を HDR 自動補正（明部加重カーブ）して変換")
         print("  -m, --hdr-ml  ゲインマップ無し画像を HDR 自動補正（Apple 学習の色→ゲイン LUT）して変換")
         print("  -y       既存の出力ファイルを上書き（既定はスキップ）")
+        print("  --mpix N      アスペクト維持で総画素数(百万画素)へ縮小（例 --mpix 8）")
+        print("  -w, --width px   アスペクト維持で横幅(px)へ縮小")
+        print("  --height px      アスペクト維持で縦幅(px)へ縮小")
+        print("  ※ リサイズは縮小のみ（原寸超え指定は原寸のまま）。3方式は最後の指定が有効。")
         exit(0)
     default:
         inputs.append(a)
@@ -95,7 +112,7 @@ for inURL in files {
     do {
         let result = try GainForge.convert(
             input: inURL, output: outURL, quality: quality, force: forceNonHDR,
-            overwrite: allowOverwrite, sdrMode: sdrMode
+            overwrite: allowOverwrite, sdrMode: sdrMode, resize: resize
         )
         let ratio = result.sizeRatio.map { Int(100.0 * $0) } ?? 0
         let tag = result.isHDR ? "HDR" : "SDR"
