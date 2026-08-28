@@ -43,6 +43,20 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(vm.totalCount, 0)
     }
 
+    /// `highlightWarmth` の既定値は 0.0（無効・従来の出力と完全に同一）。
+    func testHighlightWarmthDefaultsToZero() {
+        let vm = makeVM()
+        XCTAssertEqual(vm.highlightWarmth, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(AppViewModel.Defaults.highlightWarmth, 0.0, accuracy: 0.0001)
+    }
+
+    /// `highlightTint` の既定値は 0.0（無効・従来の出力と完全に同一）。
+    func testHighlightTintDefaultsToZero() {
+        let vm = makeVM()
+        XCTAssertEqual(vm.highlightTint, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(AppViewModel.Defaults.highlightTint, 0.0, accuracy: 0.0001)
+    }
+
     // MARK: - 追加・重複排除・派生状態
 
     func testMergeAddsAndDerivesReadyPhase() throws {
@@ -94,6 +108,8 @@ final class AppViewModelTests: XCTestCase {
         vm1.quality = 0.8
         vm1.outputMode = .customFolder
         vm1.sdrMode = .hdrCurve
+        vm1.highlightWarmth = 0.4
+        vm1.highlightTint = -0.3
         vm1.resizeKind = .width
         vm1.resizeWidth = 2560
         vm1.resizeMegapixels = 12
@@ -104,10 +120,36 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(vm2.quality, 0.8, accuracy: 0.0001)
         XCTAssertEqual(vm2.outputMode, .customFolder)
         XCTAssertEqual(vm2.sdrMode, .hdrCurve)
+        XCTAssertEqual(vm2.highlightWarmth, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(vm2.highlightTint, -0.3, accuracy: 0.0001)
         XCTAssertEqual(vm2.resizeKind, .width)
         XCTAssertEqual(vm2.resizeWidth, 2560)
         XCTAssertEqual(vm2.resizeMegapixels, 12, accuracy: 0.0001)
         XCTAssertEqual(vm2.resizeHeight, 1440)
+    }
+
+    /// `highlightWarmth` は負の値（寒色寄り）も往復して復元される。
+    func testHighlightWarmthPersistsNegativeValue() {
+        let suite = "gf.test.warmth.\(UUID().uuidString)"
+        let vm1 = makeVM(suiteName: suite)
+        vm1.highlightWarmth = -0.6
+
+        let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
+        XCTAssertEqual(vm2.highlightWarmth, -0.6, accuracy: 0.0001)
+    }
+
+    /// `highlightTint` は正負どちらの値（マゼンタ寄り／グリーン寄り）も往復して復元される。
+    func testHighlightTintPersistsBothSigns() {
+        let suite = "gf.test.tint.\(UUID().uuidString)"
+        let vm1 = makeVM(suiteName: suite)
+        vm1.highlightTint = 0.55
+
+        let vm2 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
+        XCTAssertEqual(vm2.highlightTint, 0.55, accuracy: 0.0001)
+
+        vm2.highlightTint = -0.55
+        let vm3 = AppViewModel(defaults: UserDefaults(suiteName: suite)!)
+        XCTAssertEqual(vm3.highlightTint, -0.55, accuracy: 0.0001)
     }
 
     /// `resizeKind` と各数値から Core の `ResizeMode` を正しく組み立てること。
@@ -143,6 +185,8 @@ final class AppViewModelTests: XCTestCase {
         vm.outputMode = .customFolder
         vm.customFolder = tmp
         vm.sdrMode = .hdrCurve
+        vm.highlightWarmth = 0.7
+        vm.highlightTint = -0.4
         vm.resizeKind = .megapixels
         vm.resizeMegapixels = 24
 
@@ -151,6 +195,8 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(vm.outputMode, .sameFolder)
         XCTAssertNil(vm.customFolder)
         XCTAssertEqual(vm.sdrMode, AppViewModel.Defaults.sdrMode)
+        XCTAssertEqual(vm.highlightWarmth, AppViewModel.Defaults.highlightWarmth, accuracy: 0.0001)
+        XCTAssertEqual(vm.highlightTint, AppViewModel.Defaults.highlightTint, accuracy: 0.0001)
         XCTAssertEqual(vm.resizeKind, AppViewModel.Defaults.resizeKind)
         XCTAssertEqual(vm.resizeMegapixels, AppViewModel.Defaults.resizeMegapixels, accuracy: 0.0001)
 
@@ -160,6 +206,8 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(vm2.outputMode, .sameFolder)
         XCTAssertNil(vm2.customFolder)
         XCTAssertEqual(vm2.sdrMode, AppViewModel.Defaults.sdrMode)
+        XCTAssertEqual(vm2.highlightWarmth, AppViewModel.Defaults.highlightWarmth, accuracy: 0.0001)
+        XCTAssertEqual(vm2.highlightTint, AppViewModel.Defaults.highlightTint, accuracy: 0.0001)
     }
 
     func testCustomFolderRestoreKeepsExistingPath() {

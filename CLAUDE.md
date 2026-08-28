@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GainForge は、HDR ゲインマップ付き JPEG を、ゲインマップを保持したまま HEIC に変換する macOS ツール。出力は「SDR ベース画像 + ISO ゲインマップ」で、写真アプリと同じ HDR 構造。元のカラーゲインマップを Display P3 PQ のまま **生転写** することで、写真アプリ書き出しと画素レベルでほぼ一致する。
 
-加えて、**ゲインマップを持たない SDR 画像を HDR 化する SDR→HDR 自動補正モード**を持つ。明部だけを HDR ヘッドルームへ拡張し、ベース（SDR 表示の見た目）は維持したまま「SDR ベース + 合成ゲインマップ」を書き出す。方式は `SDRConversion`（`.sdr` / `.hdrCurve` / `.hdrML`）で切り替え、既定は従来どおり SDR 保存。合成した HDR は **10bit HEIC（HEVC Main 10）** で書き出す（`.sdr` は従来どおり 8bit）。**HDR 入力（ゲインマップ付き）の生転写挙動には一切影響しない**。
+加えて、**ゲインマップを持たない SDR 画像を HDR 化する SDR→HDR 自動補正モード**を持つ。明部だけを HDR ヘッドルームへ拡張し、ベース（SDR 表示の見た目）は維持したまま「SDR ベース + 合成ゲインマップ」を書き出す。方式は `SDRConversion`（`.sdr` / `.hdrCurve` / `.hdrML`）で切り替え、既定は従来どおり SDR 保存。
+合成時は **明部だけの色調整**（色温度 `highlightWarmth` とティント `highlightTint`、いずれも既定 0＝無効）も指定でき、どちらかが非ゼロのときだけ 3ch カラーゲインマップ経路に切り替わる。合成した HDR は **10bit HEIC（HEVC Main 10）** で書き出す（`.sdr` は従来どおり 8bit）。**HDR 入力（ゲインマップ付き）の生転写挙動には一切影響しない**。
 
 要環境: macOS 15 以降（ISO ゲインマップ対応のため）、Swift 6 / Xcode 16 以降。追加ライブラリ不要（Apple フレームワークのみ）。
 
@@ -29,7 +30,9 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 
 ### Core の中核 API（[Sources/GainForgeCore/GainForge.swift](Sources/GainForgeCore/GainForge.swift)）
 
-`enum GainForge` 名前空間の static メソッド群。`convert(input:output:quality:gainScale:force:overwrite:sdrMode:resize:)` が起点で、ゲインマップ**有り**は常に `writeGainMapHEIC`（生転写）。ゲインマップ**無し**は `sdrMode` で分岐: `.sdr` → `writeSDRHEIC`（従来 8bit）/ `.hdrCurve` → `writeExpandedHDRHEIC`（明部加重の逆トーンマッピングで合成）/ `.hdrML` → `writeMLExpandedHDRHEIC`（Apple 学習の色→ゲイン統計 LUT で合成。同梱 LUT を読めないときは `.hdrCurve` へ自動降格し、CLI/GUI がその旨をユーザーへ通知する）。`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC。`isMLGainLUTAvailable` で LUT の可否を公開する。エラーは型付き `GainForgeError`（`LocalizedError` 準拠で日本語メッセージ）。
+`enum GainForge` 名前空間の static メソッド群。`convert(input:output:quality:gainScale:force:overwrite:sdrMode:resize:highlightWarmth:highlightTint:)` が起点で、ゲインマップ**有り**は常に `writeGainMapHEIC`（生転写）。ゲインマップ**無し**は `sdrMode` で分岐: `.sdr` → `writeSDRHEIC`（従来 8bit）/ `.hdrCurve` → `writeExpandedHDRHEIC`（明部加重の逆トーンマッピングで合成）/ `.hdrML` → `writeMLExpandedHDRHEIC`（Apple 学習の色→ゲイン統計 LUT で合成。同梱 LUT を読めないときは `.hdrCurve` へ自動降格し、CLI/GUI がその旨をユーザーへ通知する）。`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC。`isMLGainLUTAvailable` で LUT の可否を公開する。
+
+**明部の色調整（`highlightWarmth` / `highlightTint` / [ColorGainMap.swift](Sources/GainForgeCore/ColorGainMap.swift)）**: 写真の WB と同じ 2 軸。`highlightWarmth` は色温度（-1.0…1.0、正で色温度を下げる＝暖色）、`highlightTint` はティント（-1.0…1.0、正でマゼンタ・負でグリーン、**輝度中立**）。いずれも既定 0.0 で、`.hdrCurve` / `.hdrML` の合成時だけ効き、`.sdr` と生転写には作用しない。**両方 0.0 のときは従来の CoreImage 自動生成経路をそのまま通り、出力は現行実装とバイト単位で一致する**（HEAD 版バイナリとの比較で実証）。どちらかが非ゼロのときだけ `writeColorGainMapHEIC`（3ch カラーゲインマップを自前生成し ImageIO で添付）へ分岐する。可否は `isHighlightColorShiftAvailable` で公開（使えない環境では従来経路へ自動降格）。エラーは型付き `GainForgeError`（`LocalizedError` 準拠で日本語メッセージ）。
 
 **リサイズ（`resize:` / [ResizeMode.swift](Sources/GainForgeCore/ResizeMode.swift)）**: 書き出し時に全経路共通で縮小できる。`ResizeMode` は `.original`（既定・リサイズなし）/ `.megapixels(Double)`（総画素数）/ `.fitWidth(Int)` / `.fitHeight(Int)`。**アスペクト比は常に維持・縮小のみ**（原寸超え指定は原寸のまま）。目標寸法／スケール率は純粋ロジック `ResizePlanner`（UI 非依存・テスト可能）が計算し、`.original`（または縮小にならないとき）は `nil` を返して現行の等倍経路をそのまま通す（生転写の画素一致保証を壊さない）。再サンプルは `CILanczosScaleTransform`（最高品質）で統一。**生転写ではベースとゲインマップをともに Lanczos で同率縮小**して相対比を保つ（`gainScale × baseScale`。基準寸法は `baseCG` の実ピクセル寸法）。合成経路は合成前に SDR を縮小するのでベースとゲインマップが自動整合。出力寸法は HEVC 4:2:0 の奇数アーティファクト回避のため**偶数へ丸める**。縮小時は EXIF 等の旧ピクセル寸法キーを除去する。UI は種別 `ResizeKind`（値なし・`ResizeMode` と 1:1）と各数値を別々に永続化して組み立てる。
 
@@ -40,7 +43,7 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 - **並列変換** はスライディングウィンドウ方式（`maxConcurrent` ≈ コア数、上限 3）。1 件完了ごとに該当行をライブ更新。中止要求後は新規投入を止め、実行中の 1 件は完走させる。
 - **出力先の事前計画** は純粋ロジック `OutputPlanner`（[App/Sources/Models.swift](App/Sources/Models.swift)）に分離。バッチ内衝突は連番で必ず回避し、ディスク上の既存ファイルは上書き確認ダイアログで解決する。`ExistingOutputFinder` も同様に UI 非依存でテスト可能。
 - Task 境界を越える値は Sendable に限定（エラーは文字列に畳む `ConversionOutcome`、NSImage は生成直後の未共有インスタンスのみ `@unchecked Sendable` で一度だけ受け渡す）。
-- 設定（品質・出力先・SDR画像の扱い `sdrMode`・リサイズ）は `UserDefaults` に永続化（`didSet` 経由）。ツールバーの「SDR画像」ポップアップが `sdrMode` を束縛する。リサイズは種別 `resizeKind` と各方式の数値（`resizeMegapixels` / `resizeWidth` / `resizeHeight`）を別々に持ち、`resizeMode` computed が `ResizeMode` を組み立てる（方式を切り替えても各値を保持）。ツールバーの「サイズ」ポップアップ＋数値フィールド（プリセット⌄付き）が束縛する。
+- 設定（品質・出力先・SDR画像の扱い `sdrMode`・明部の色 `highlightWarmth` / `highlightTint`・リサイズ）は `UserDefaults` に永続化（`didSet` 経由）。ツールバーの「SDR画像」ポップアップが `sdrMode` を束縛する。明部の色は「明部の色」ボタン＋ポップオーバー（色温度・ティントの 2 スライダー＋リセット）で、`.sdr` 選択時・変換中・`isHighlightColorShiftAvailable` が false のときは無効化する。リサイズは種別 `resizeKind` と各方式の数値（`resizeMegapixels` / `resizeWidth` / `resizeHeight`）を別々に持ち、`resizeMode` computed が `ResizeMode` を組み立てる（方式を切り替えても各値を保持）。ツールバーの「サイズ」ポップアップ＋数値フィールド（プリセット⌄付き）が束縛する。
 
 ## 変換ロジックの「落とし穴」（移植元で実証済み・必ず維持）
 
@@ -75,6 +78,28 @@ CLI と GUI に変換ロジックを **持たせない**。新しい変換挙動
 - LUT 生成スクリプトは集計元の写真データに依存するオフライン処理のため**リポジトリには同梱しない**。差し替え時はフォーマット厳守（`GainForge.swift` の該当コメント参照）。
 - さらなる将来案として、ExpandNet 等の学習モデルを CoreML 化して同じ書き出し経路に合流させる余地がある（LUT 法・カーブ法と選択制のまま拡張）。
 
+### 明部の色調整（`highlightWarmth` / `highlightTint`）— なぜ 3ch カラーゲインマップが要るか
+
+「明部だけ色を寄せる」には per-channel のゲイン差を**ゲインマップに保存できる**必要がある。合成カーネル側は 2 軸の tint を掛け合わせるだけで済むが、**保存経路を変えないと色差が消える**。
+
+- **色温度軸**: `vec3(1 + k·t, 1, 1 − k·t)`（`t` は既存の明部加重、`k` は内部係数。UI 強度 1.0 → k=0.15）
+- **ティント軸**: `vec3(1 + r·m·t, 1 − m·t, 1 + r·m·t)`（UI 強度 1.0 → m=0.06）。`r = 0.7152/(0.2126+0.0722) ≈ 2.5112` は **G を下げた分の輝度を R/B で取り戻す**係数で、これにより明部の明るさを変えずに色だけが寄る
+- 2 軸は直交する（実測: ティントを最大まで振っても R/B 比＝色温度はほぼ不動）
+
+要点:
+
+1. **CoreImage の `writeHEIF10Representation(of:options:[.hdrImage:])` が生成するゲインマップは 1ch モノクロ**（PixelFormat `L008`・`ChannelMetadata` 1要素）。per-channel の差は輝度に平均化されて**保存されない**（実測確認済み）。よって強度が非ゼロのときだけ、生転写と同じ ImageIO 低レベル経路（`CGImageDestinationAddAuxiliaryDataInfo`）で 3ch(32BGRA) を自前添付する。保存時に 4:2:0 カラー（`420f`）へ変換され、Apple 公式デコード（`CIImage(options:[.expandToHDR:true])`）で色が出る。
+2. **ゲインマップ metadata をゼロから自作すると `CGImageDestinationFinalize` が false になる**。CoreImage に 32×32 のダミーを一度だけ書かせて正規の metadata を借り、`ChannelMetadata` を**配列タグごと差し替えて** `GainMapMin = 0` / `GainMapMax = この画像の実測最大ゲイン`（`measureMaxLog2`）にする。構造体配列の中の個別タグは `CGImageMetadataSetValueWithPath` では書き換えられない（直下の `AlternateHeadroom` には効く）。借用元は寸法が違ってもよいので、**ベース画像の二重エンコードは起きない**（1 パスで完結）。
+3. **`GainMapMax` / `AlternateHeadroom` を固定値にしてはいけない**。ISO ゲインマップの適用重みは `w = log2(表示ヘッドルーム) / AlternateHeadroom` で決まり、`AlternateHeadroom = GainMapMax` のとき実効ゲインは `g^(log2(H)/GainMapMax)` になる。実際の最大ゲインより大きな上限を宣言すると**表示時のゲインが丸ごと弱まる**（実測: 上限 3.25 固定にしたところ、本来 1.10 で足りる画像で効果が約 1/3 に薄まり「色温度を変えても変わらない」状態になった。[Docs/検証_明部の色調整.md](Docs/検証_明部の色調整.md)）。`ColorGainMap.measureMaxLog2` が `CIAreaMaximum` で画像ごとに実測する（CoreImage の自動生成も同じことをしている）。
+4. ベースは `RGBA16` の `CGImage` で渡す（ImageIO が 10bit＝HEVC Main 10 で書く）。このとき **元画像の `Depth` プロパティを引き継がないこと**。8bit JPEG/PNG 由来の `Depth=8` を渡すと 16bit ベースでも出力が 8bit に落ちる。
+5. 検算は 2 種類。`hasGainMap`（落とし穴6）に加え、**ゲインマップがカラーのまま保存されたか**（PixelFormat が `L008` でないか）も確認する。
+6. **強度 0 のときは新経路に一切入らない**。従来の CoreImage 自動生成をそのまま通し、出力は現行実装とバイト単位で一致する（回帰テストで固定）。
+7. **CIKernel の引数名をカーネル内のローカル変数と衝突させないこと**。`expandHighlightsKernel` には肌色判定用のローカル変数 `warm` が既にあり、引数名を `warm` にするとシャドウイングされて tint が誤った値で適用される（コンパイルも実行も通るため発見しにくい）。引数名は `warmTint`。
+
+**メモリ**: この経路だけベースの `RGBA16` `CGImage`（4K で約 66MB、8K で約 265MB）とゲインマップの BGRA8 バッファ（同 33MB / 132MB）を明示的に確保する。GUI は最大 3 並列なので、大判画像を強度非ゼロで一括変換すると従来経路よりメモリを使う。**強度が利用できない環境（借用テンプレートを用意できない）では従来の 1ch 経路へ自動降格し、変換自体は成功させる**（`.hdrML` の LUT 欠損時と同じ方針。可否は `isHighlightWarmthAvailable` で公開し、CLI は開始前に一度警告、GUI はスライダーを無効化する）。
+
+効き方の実測（強度 0 基準の R/B 比の変化）: 太陽 +9.7%（強度0.3）/ +35.4%（1.0）、白壁 +6.9% / +26.7%、空 -0.4%、肌色 +0.7%、鮮やかな赤 +0.3%。**中間調・暗部はほぼ不変で明部だけが振れる**。既存の色保護（低彩度・肌色）は**ゲイン量にのみ効き tint には適用していない**（白い面が暖色光を受けて暖色に寄るのは自然なため）。
+
 ## コマンド
 
 ### CLI / Core（SwiftPM）
@@ -86,7 +111,7 @@ swift test                             # Core のユニットテスト
 swift test --filter GainForgeCoreTests/<テストメソッド名>   # 単一テスト
 ```
 
-CLI オプション: `-q 0.0-1.0`（品質、既定 0.6）/ `-o 出力先` / `-f`（ゲインマップ無しも SDR HEIC 化）/ `-y`（既存上書き）/ `--mpix N`・`-w px`・`--height px`（アスペクト維持で縮小、最後の指定が有効）/ `-h`。
+CLI オプション: `-q 0.0-1.0`（品質、既定 0.6）/ `-o 出力先` / `-f`（ゲインマップ無しも SDR HEIC 化）/ `--warm N`（明部だけ色温度を下げる）・`--tint N`（明部だけマゼンタ/グリーンへ寄せる。輝度中立）— どちらも -1.0〜1.0、既定 0＝無効、`-x` / `-m` 併用時のみ効く/ `-y`（既存上書き）/ `--mpix N`・`-w px`・`--height px`（アスペクト維持で縮小、最後の指定が有効）/ `-h`。
 
 ### GUI（Xcode）
 

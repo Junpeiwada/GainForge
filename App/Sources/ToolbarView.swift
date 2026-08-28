@@ -4,8 +4,15 @@ import GainForgeCore
 /// 上部ツールバー：品質・サイズ・出力先・SDR画像を**フローレイアウト**で並べる。
 /// ウィンドウ幅が広ければ 1 段に収め、狭ければ入り切らないセクション（SDR画像）が
 /// 次の段へ自動的に折り返す。実行ボタン（変換 / クリア）は画面下部の FooterBarView へ分離。
+///
+/// **SDR 画像にしか効かない設定はボタン 1 つに畳んである**（`sdrSection`）。変換方法と
+/// 「明部の色」はどちらもゲインマップ**無し**の入力にしか作用しないが、以前は品質・サイズ・
+/// 出力先と対等に横並びしていたため、その作用範囲が `disabled` と help でしか伝わらなかった。
+/// ポップオーバーの中へ入れ子にすることで、**従属関係を構造として示す**（枠で囲う案も試したが、
+/// ツールバーが縦に伸びて他セクションと高さが揃わず、見た目が落ち着かなかった）。
 struct ToolbarView: View {
     @EnvironmentObject var model: AppViewModel
+    @State private var showSDRPopover = false
 
     var body: some View {
         FlowLayout(hSpacing: 16, vSpacing: 8) {
@@ -59,21 +66,103 @@ struct ToolbarView: View {
         .fixedSize()
     }
 
-    /// SDR 画像の扱い（ゲインマップ無し入力のみに作用。HDR 入力は常に生転写）。
+    /// SDR 画像（ゲインマップ**無し**の入力）にだけ作用する設定を、ボタン 1 つへ畳んだセクション。
+    ///
+    /// 中身は「変換方法」と「明部の色」の 2 つ。どちらもゲインマップ付き（HDR）入力には一切
+    /// 効かず（あちらは常に生転写）、さらに「明部の色」は HDR 補正を選んだときだけ効く従属設定。
+    /// **入れ子にすることで従属関係を構造で示す**のがここの役目で、以前は 2 つが品質・サイズ・
+    /// 出力先と対等に並んでいたため、明部の色ボタンが灰色である理由が help を読むまで分からなかった。
+    ///
+    /// 畳んだぶん現在の設定がツールバーから見えなくなるので、**ボタンのラベルに要約を出す**
+    /// （`sdrButtonLabel`）。FlowLayout から見ても子は 1 つなので、折り返しで分断されない。
     private var sdrSection: some View {
-        HStack(spacing: 8) {
-            Text("SDR画像")
+        Button(sdrButtonLabel) { showSDRPopover = true }
+            .disabled(!model.canEditSettings)
+            .popover(isPresented: $showSDRPopover, arrowEdge: .bottom) { sdrPopover }
+            .fixedSize()
+            .help("ゲインマップの無い SDR 画像の変換方法と、HDR 補正で合成する明部の色を設定します。"
+                + "いずれもゲインマップ付き画像（生転写）には作用しません。")
+    }
+
+    /// ツールバーボタンのラベル。**畳んだ設定の要約**なので、開かなくても現状が読めるようにする。
+    /// 明部の色は「効いているときだけ」併記する（`SDRで保存` では無効なので出さない）。
+    private var sdrButtonLabel: String {
+        let mode: String
+        switch model.sdrMode {
+        case .sdr:      mode = "SDRで保存"
+        case .hdrCurve: mode = "HDR補正（カーブ）"
+        case .hdrML:    mode = "HDR補正（ML/LUT）"
+        }
+        let w = model.highlightWarmth, t = model.highlightTint
+        guard model.sdrMode != .sdr, abs(w) > 0.0001 || abs(t) > 0.0001 else {
+            return "SDR画像: \(mode)"
+        }
+        return String(format: "SDR画像: %@ (%+.2f / %+.2f)", mode, w, t)
+    }
+
+    /// ポップオーバーの中身：変換方法（ラジオ）と、その下に従属する「明部の色」の 2 軸。
+    ///
+    /// **明部の色は変換方法の下に置き、`SDRで保存` のときはまとめて無効化する**。並び順と
+    /// 無効化がそのまま「HDR 補正を選んだときだけ効く」の説明になっている。
+    private var sdrPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SDR画像（ゲインマップ無しの入力のみ）").font(.headline)
+
             Picker("", selection: $model.sdrMode) {
                 Text("SDRで保存").tag(SDRConversion.sdr)
                 Text("HDR補正（カーブ）").tag(SDRConversion.hdrCurve)
                 Text("HDR補正（ML/LUT）").tag(SDRConversion.hdrML)
             }
+            .pickerStyle(.radioGroup)
             .labelsHidden()
-            .frame(width: 170)
             .disabled(!model.canEditSettings)
-            .help("ゲインマップの無い SDR 画像の変換方法。HDR 補正は明部だけを HDR 領域へ拡張します（ベースの見た目は維持）。カーブは手書きの明部加重、ML/LUT は Apple 写真の実 HDR から学習した色ごとのゲインを使います。ゲインマップ付き画像には影響しません。")
+            .help("HDR 補正は明部だけを HDR 領域へ拡張します（ベースの見た目は維持）。カーブは手書きの明部加重、ML/LUT は Apple 写真の実 HDR から学習した色ごとのゲインを使います。")
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("明部の色").font(.headline)
+                highlightAxisSlider(title: "色温度", value: $model.highlightWarmth,
+                                    leftLabel: "寒色", rightLabel: "暖色")
+                highlightAxisSlider(title: "ティント", value: $model.highlightTint,
+                                    leftLabel: "グリーン", rightLabel: "マゼンタ")
+                Button("リセット") {
+                    model.highlightWarmth = 0.0
+                    model.highlightTint = 0.0
+                }
+            }
+            // HDR 補正時のみ有効。カラーゲインマップを作れない環境でも丸ごと無効化する
+            // （その旨は変換開始時に一度だけ通知される）。
+            .disabled(!model.canEditSettings || model.sdrMode == .sdr
+                      || !GainForge.isHighlightColorShiftAvailable)
         }
-        .fixedSize()
+        .padding(14)
+        .frame(width: 260)
+    }
+
+    /// 色軸 1 本分（ラベル・数値・スライダー・左右端の説明）。色温度／ティントで共用する。
+    @ViewBuilder
+    private func highlightAxisSlider(title: String, value: Binding<Double>,
+                                     leftLabel: String, rightLabel: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(String(format: "%.2f", value.wrappedValue))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            // step を刻んでおくと「0（無効）に戻す」がマウス操作で確実にできる。
+            Slider(value: value, in: -1.0...1.0, step: 0.05)
+                .disabled(!model.canEditSettings)
+            HStack {
+                Text(leftLabel)
+                Spacer()
+                Text(rightLabel)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - サイズ（書き出し時のリサイズ。全経路で縮小のみ・アスペクト比維持）

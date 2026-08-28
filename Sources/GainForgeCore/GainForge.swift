@@ -50,6 +50,15 @@ public enum GainForge {
     ///     HDR ゲインマップを合成する（`.hdrCurve` / `.hdrML` の合成出力は 10bit HEIC）。`.hdrML` は
     ///     同梱 LUT を読めないとき `.hdrCurve` へ自動降格する（可否は `isMLGainLUTAvailable`）。
     ///     ゲインマップ付き入力（HDR）はこの設定に関わらず常に生転写される。
+    ///   - highlightWarmth: 明部だけの色温度調整（-1.0…1.0、既定 0.0 で無効）。正で色温度を下げる
+    ///     （暖色寄り）。`.hdrCurve` / `.hdrML` のときだけ効き、`.sdr` と生転写経路には作用しない。
+    ///     **0.0 のときは従来どおり CoreImage の自動生成経路を通り、出力は現行と完全に一致する**。
+    ///     非ゼロのときだけ 3ch カラーゲインマップを自前生成する経路に切り替わる
+    ///     （CoreImage の自動生成は 1ch モノクロで色差が消えるため。[ColorGainMap.swift] 参照）。
+    ///   - highlightTint: 明部だけのティント調整（-1.0…1.0、既定 0.0 で無効）。正でマゼンタ、負でグリーン。
+    ///     色温度（`highlightWarmth`）とは独立した 2 軸目で、両方を同時に指定できる。輝度中立
+    ///     （G を下げた分 R/B を上げる）なので明部の明るさは変わらない。効く条件・経路は
+    ///     `highlightWarmth` と同じ。
     ///   - resize: 書き出し時のリサイズ方式（既定 `.original` はリサイズなし）。アスペクト比を維持し
     ///     **縮小のみ**行う（原寸超えは原寸のまま）。全経路（生転写 / SDR / 合成）へ共通に効き、
     ///     再サンプルは `CILanczosScaleTransform`（最高品質）で行う。生転写ではゲインマップも同率で縮小。
@@ -64,7 +73,9 @@ public enum GainForge {
         force: Bool = false,
         overwrite: Bool = false,
         sdrMode: SDRConversion = .sdr,
-        resize: ResizeMode = .original
+        resize: ResizeMode = .original,
+        highlightWarmth: Double = 0.0,
+        highlightTint: Double = 0.0
     ) throws -> ConversionResult {
         let q = max(0.0, min(1.0, quality))
         let inputHasGainMap = hasGainMap(input)
@@ -81,10 +92,12 @@ public enum GainForge {
             case .sdr:
                 try writeSDRHEIC(input: input, output: output, quality: q, resize: resize)
             case .hdrCurve:
-                try writeExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize)
+                try writeExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize,
+                                         highlightWarmth: highlightWarmth, highlightTint: highlightTint)
                 outputIsHDR = true
             case .hdrML:
-                try writeMLExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize)
+                try writeMLExpandedHDRHEIC(input: input, output: output, quality: q, resize: resize,
+                                           highlightWarmth: highlightWarmth, highlightTint: highlightTint)
                 outputIsHDR = true
             }
         }
@@ -258,8 +271,14 @@ public enum GainForge {
     /// 3. EXIF/GPS/TIFF/Orientation は `settingProperties` で元画像から引き継ぐ
     ///    （落とし穴7: メタデータ欠落と回転を防ぐ）。ベースの色は Display P3（PQ ではない）。
     /// 4. 書き出し後に `hasGainMap` で検算する（落とし穴6）。
+    ///
+    /// `highlightWarmth` が非ゼロのときだけ 2 の経路を使わず、`ColorGainMap` で 3ch カラー
+    /// ゲインマップを自前生成して ImageIO で添付する（CoreImage の自動生成は 1ch モノクロで
+    /// per-channel の色シフトが消えるため）。ゼロのときは従来経路をそのまま通り出力は不変。
     private static func writeSynthesizedHDRHEIC(
         input: URL, output: URL, quality: Double, resize: ResizeMode,
+        highlightWarmth: Double = 0.0,
+        highlightTint: Double = 0.0,
         synthesize: (_ sdr: CIImage, _ context: CIContext, _ input: URL) throws -> CIImage
     ) throws {
         guard let src = CGImageSourceCreateWithURL(input as CFURL, nil),
@@ -286,21 +305,30 @@ public enum GainForge {
 
         let hdr = try synthesize(sdr, ctx, input)
 
-        // ベースには元画像のプロパティ（EXIF/GPS/TIFF/Orientation）を持たせる。
-        let base = sdr.settingProperties(origProps)
-
         let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
-        let opts: [CIImageRepresentationOption: Any] = [
-            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality,
-            .hdrImage: hdr,
-        ]
-        // 10bit HEIC（HEVC Main 10）で書き出す。8bit の writeHEIFRepresentation(format:.RGBA8)
-        // と違い高精度入力（16bit PNG 等）の階調を保持する。SDR ベースの見た目は不変。
-        do {
-            try ctx.writeHEIF10Representation(of: base, to: output,
-                                             colorSpace: p3, options: opts)
-        } catch {
-            throw GainForgeError.finalizeFailed(output)
+        // 色温度調整が無効なとき、および借用テンプレートを用意できない環境では従来経路を通す
+        // （後者は安全弁。調整は効かなくなるが変換自体は成功させる。`isHighlightColorShiftAvailable`）。
+        let colorShiftNeutral = HighlightWarmth.isNeutral(highlightWarmth)
+            && HighlightTint.isNeutral(highlightTint)
+        if colorShiftNeutral || !isHighlightColorShiftAvailable {
+            // ベースには元画像のプロパティ（EXIF/GPS/TIFF/Orientation）を持たせる。
+            // カラーゲインマップ経路ではプロパティを ImageIO 側へ直接渡すため、ここでは不要。
+            let base = sdr.settingProperties(origProps)
+            let opts: [CIImageRepresentationOption: Any] = [
+                CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality,
+                .hdrImage: hdr,
+            ]
+            // 10bit HEIC（HEVC Main 10）で書き出す。8bit の writeHEIFRepresentation(format:.RGBA8)
+            // と違い高精度入力（16bit PNG 等）の階調を保持する。SDR ベースの見た目は不変。
+            do {
+                try ctx.writeHEIF10Representation(of: base, to: output,
+                                                 colorSpace: p3, options: opts)
+            } catch {
+                throw GainForgeError.finalizeFailed(output)
+            }
+        } else {
+            try writeColorGainMapHEIC(base: sdr, hdr: hdr, props: origProps, output: output,
+                                      quality: quality, context: ctx, baseColorSpace: p3)
         }
 
         guard hasGainMap(output) else {
@@ -308,10 +336,54 @@ public enum GainForge {
         }
     }
 
+    /// 合成 HDR から 3ch カラーゲインマップを自前生成し、ImageIO 低レベル経路で HEIC に添付する。
+    ///
+    /// 明部の色温度調整が有効なときだけ通る経路。CoreImage の自動生成（1ch）では per-channel の
+    /// 色シフトが輝度に平均化されて消えるため、生転写と同じ `CGImageDestinationAddAuxiliaryDataInfo`
+    /// でカラーのゲインマップを添付する。要点:
+    /// - ベースは `RGBA16` の `CGImage` として作る。ImageIO はこれを 10bit（HEVC Main 10）で書くため、
+    ///   従来の `writeHEIF10Representation` 経路と同じ階調を保てる（実測で `Depth=10` を確認）。
+    /// - EXIF/GPS/TIFF/Orientation と PNG テキストメタは `props` 経由で引き継ぐ（落とし穴7）。
+    /// - 書き出し後、ゲインマップがカラーのまま保存されたかを検算する（落とし穴6 と同趣旨）。
+    private static func writeColorGainMapHEIC(
+        base: CIImage, hdr: CIImage, props: [String: Any], output: URL,
+        quality: Double, context: CIContext, baseColorSpace: CGColorSpace
+    ) throws {
+        guard let baseCG = context.createCGImage(base, from: base.extent,
+                                                 format: .RGBA16, colorSpace: baseColorSpace) else {
+            throw GainForgeError.baseImageUnreadable
+        }
+        let aux = try ColorGainMap.auxiliaryInfo(base: base, hdr: hdr, context: context)
+        guard let dst = CGImageDestinationCreateWithURL(output as CFURL,
+                                                        UTType.heic.identifier as CFString, 1, nil) else {
+            throw GainForgeError.destinationCreateFailed(output)
+        }
+        var baseProps = props
+        // 元画像（8bit JPEG/PNG）由来の Depth を引き継ぐと ImageIO が 8bit で書いてしまい、
+        // 16bit ベースを渡しても 10bit にならない。深度はベース CGImage に決めさせる。
+        baseProps.removeValue(forKey: kCGImagePropertyDepth as String)
+        baseProps[kCGImageDestinationLossyCompressionQuality as String] = quality
+        CGImageDestinationAddImage(dst, baseCG, baseProps as CFDictionary)
+        CGImageDestinationAddAuxiliaryDataInfo(dst, kCGImageAuxiliaryDataTypeISOGainMap, aux as CFDictionary)
+        guard CGImageDestinationFinalize(dst) else {
+            throw GainForgeError.finalizeFailed(output)
+        }
+        // 添付は成功しても保存段で 1ch へ落とされていないことを確認する。
+        guard ColorGainMap.isColorGainMap(output) else {
+            throw GainForgeError.colorGainMapFailed
+        }
+    }
+
     /// `.hdrCurve`: 明部加重の逆トーンマッピング（手書きカーブ）でゲインを合成して書き出す。
-    private static func writeExpandedHDRHEIC(input: URL, output: URL, quality: Double, resize: ResizeMode) throws {
+    private static func writeExpandedHDRHEIC(input: URL, output: URL, quality: Double,
+                                             resize: ResizeMode, highlightWarmth: Double,
+                                             highlightTint: Double) throws {
         try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality, resize: resize,
-                                    synthesize: makeHighlightExpandedHDR)
+                                    highlightWarmth: highlightWarmth,
+                                    highlightTint: highlightTint) { sdr, context, input in
+            try makeHighlightExpandedHDR(sdr, context: context, input: input,
+                                         warmth: highlightWarmth, tint: highlightTint)
+        }
     }
 
     /// `.hdrML`: Apple 写真ライブラリから学習した色→ゲイン統計 LUT でゲインを合成して書き出す。
@@ -319,12 +391,18 @@ public enum GainForge {
     /// LUT がロード/検証できないとき（リソース同梱ミス・破損など）は `.hdrCurve`（明部加重カーブ）
     /// へ自動降格する。環境依存の失敗でバッチ全体をエラーにしないための安全弁
     /// （[Docs/SDRのHDR化手法の研究.md] §7 の降格方針に一致）。降格しても出力はゲインマップ付き HDR。
-    private static func writeMLExpandedHDRHEIC(input: URL, output: URL, quality: Double, resize: ResizeMode) throws {
-        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality, resize: resize) { sdr, context, input in
+    private static func writeMLExpandedHDRHEIC(input: URL, output: URL, quality: Double,
+                                               resize: ResizeMode, highlightWarmth: Double,
+                                               highlightTint: Double) throws {
+        try writeSynthesizedHDRHEIC(input: input, output: output, quality: quality, resize: resize,
+                                    highlightWarmth: highlightWarmth,
+                                    highlightTint: highlightTint) { sdr, context, input in
             guard let lutData = gainLUTData else {
-                return try makeHighlightExpandedHDR(sdr, context: context, input: input)
+                return try makeHighlightExpandedHDR(sdr, context: context, input: input,
+                                                    warmth: highlightWarmth, tint: highlightTint)
             }
-            return try makeLUTExpandedHDR(sdr, lutData: lutData, input: input)
+            return try makeLUTExpandedHDR(sdr, lutData: lutData, input: input,
+                                          warmth: highlightWarmth, tint: highlightTint)
         }
     }
 
@@ -339,8 +417,15 @@ public enum GainForge {
     ///  (2) 肌色保護   … 暖色 (R>=G>=B) かつ中程度彩度（鮮やか色は除外）を抑制。
     ///  (3) クリップ近傍(鏡面・光源) … 保護を解除して伸ばす。
     /// per-pixel のスカラーゲインなので色相・彩度は不変。色は「どれだけ伸ばすか」だけを決める。
+    /// ただし `warmTint` / `magentaTint` が非ゼロのときだけは、明部加重 `tl` に比例した per-channel の
+    /// tint を掛けて明部の色をずらす（`warmTint` は正で暖色＝色温度を下げる、`magentaTint` は正で
+    /// マゼンタ）。2 軸は独立で掛け合わせる。tint も `tl` に乗るので、中間調・暗部は無彩のまま
+    /// 変わらない。`magentaTint` 側は G を下げた分を R/B で取り戻す輝度中立の配分にしてあるため、
+    /// 明部の明るさは変えずに色だけが寄る。
     private static let expandHighlightsKernel: CIColorKernel? = CIColorKernel(source: """
-    kernel vec4 gainforgeExpandHighlights(__sample s, float knee, float headroom) {
+    kernel vec4 gainforgeExpandHighlights(__sample s, float knee, float headroom, float warmTint, float magentaTint, float neutralRatio) {
+        // NOTE: 引数名は warmTint。下の肌色判定に同名のローカル変数 warm があり、
+        //       warm という引数名にするとシャドウイングされて tint が常に 1.0 扱いになる。
         vec3 c = s.rgb;
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
         float tl = smoothstep(knee, 1.0, l);           // 従来の明部加重カーブ
@@ -360,7 +445,10 @@ public enum GainForge {
         float protect = clamp(diffuse * (1.0 - spec), 0.0, 1.0);
 
         float gain = 1.0 + (headroom - 1.0) * tl * (1.0 - 0.85 * protect);
-        return vec4(c * gain, s.a);
+        vec3 tint = vec3(1.0 + warmTint * tl, 1.0, 1.0 - warmTint * tl);
+        float mg = magentaTint * tl;
+        tint *= vec3(1.0 + neutralRatio * mg, 1.0 - mg, 1.0 + neutralRatio * mg);
+        return vec4(c * gain * max(tint, vec3(0.0)), s.a);
     }
     """)
 
@@ -376,7 +464,11 @@ public enum GainForge {
     ///   不自然に光るのを防ぐ（抑制するのは「どれだけ伸ばすか」だけで、色相・彩度は不変のまま）。
     /// - `headroom` は画像の平均輝度から自動決定する（暗い画像ほど拡張余地が大きく強め、
     ///   既に明るい画像は眩しさを避けて控えめ）。ユーザー操作は不要（完全自動）。
-    private static func makeHighlightExpandedHDR(_ sdr: CIImage, context: CIContext, input: URL) throws -> CIImage {
+    /// - `warmth` / `tint` が非ゼロなら、明部だけ色をずらす per-channel tint を同じ明部加重に乗せる
+    ///   （`warmth` は色温度軸、`tint` はマゼンタ⇔グリーン軸で輝度中立）。
+    private static func makeHighlightExpandedHDR(_ sdr: CIImage, context: CIContext, input: URL,
+                                                 warmth: Double = 0.0,
+                                                 tint: Double = 0.0) throws -> CIImage {
         // 平均輝度（リニア）からヘッドルームを自動決定。暗い→強め / 明るい→控えめ。
         // 上限 4x=2stop / 下限 2x≈1.17stop。明部だけを控えめに伸ばす自然な強度に確定。
         let mean = meanLinearLuma(sdr, context: context)
@@ -388,7 +480,10 @@ public enum GainForge {
 
         guard let kernel = expandHighlightsKernel,
               let out = kernel.apply(extent: sdr.extent,
-                                     arguments: [sdr, Float(knee), Float(headroom)]) else {
+                                     arguments: [sdr, Float(knee), Float(headroom),
+                                                 Float(HighlightWarmth.coefficient(warmth)),
+                                                 Float(HighlightTint.coefficient(tint)),
+                                                 Float(HighlightTint.luminanceNeutralRatio)]) else {
             throw GainForgeError.hdrSynthesisFailed(input)
         }
         return out
@@ -431,6 +526,14 @@ public enum GainForge {
         return healthy ? data : nil
     }()
 
+    /// 明部の色調整（`highlightWarmth` / `highlightTint`）が実際に使えるか。
+    ///
+    /// これらの調整は 3ch カラーゲインマップの自前生成に依存し、その metadata は CoreImage に
+    /// ダミーを一度書かせて借用している（[ColorGainMap.swift]）。環境要因でその借用に失敗すると
+    /// 調整は無効化され、**従来の 1ch 経路へ自動降格**して変換自体は成功する（`.hdrML` の
+    /// LUT 欠損時に `.hdrCurve` へ降格するのと同じ方針）。UI が事前に可否を示すために公開する。
+    public static var isHighlightColorShiftAvailable: Bool { ColorGainMap.template != nil }
+
     /// `.hdrML`（ML/LUT 方式）の LUT が利用可能か。false のとき `.hdrML` は `.hdrCurve` へ降格する。
     /// UI が「ML/LUT を選んだが実際にはカーブ法で処理する」旨を事前にユーザーへ通知するために公開する。
     public static var isMLGainLUTAvailable: Bool { gainLUTData != nil }
@@ -438,10 +541,18 @@ public enum GainForge {
     /// 正規化ゲイン g' を拡張レンジへ復元して乗算するカーネル。stock の multiply は >1.0 を
     /// クランプし得るため自前で `out = sdr * (1 + g' * (gmax-1))` を直接計算する。ソースは定数なので
     /// 変換ごとに再コンパイルせず一度だけ生成する（CIColorKernel(source:) の非推奨警告は既知・許容）。
+    /// `warmTint` / `magentaTint` が非ゼロのときは、輝度から求めた明部加重 `t` に比例する
+    /// per-channel tint を掛けて明部の色をずらす（カーブ法と同じ knee=0.5 を使い、両方式で
+    /// 効き方を揃える）。2 軸の意味と輝度中立の配分はカーブ法側と同一。
     private static let expandLUTKernel: CIColorKernel? = CIColorKernel(source: """
-    kernel vec4 gainforgeExpandLUT(__sample s, __sample g, float gmaxMinus1) {
+    kernel vec4 gainforgeExpandLUT(__sample s, __sample g, float gmaxMinus1, float warmTint, float magentaTint, float neutralRatio) {
         vec3 gain = vec3(1.0) + g.rgb * gmaxMinus1;
-        return vec4(s.rgb * gain, s.a);
+        float l = dot(s.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float t = smoothstep(0.5, 1.0, l);
+        vec3 tint = vec3(1.0 + warmTint * t, 1.0, 1.0 - warmTint * t);
+        float mg = magentaTint * t;
+        tint *= vec3(1.0 + neutralRatio * mg, 1.0 - mg, 1.0 + neutralRatio * mg);
+        return vec4(s.rgb * gain * max(tint, vec3(0.0)), s.a);
     }
     """)
 
@@ -453,7 +564,11 @@ public enum GainForge {
     /// - 作業空間は呼び出し元（`writeSynthesizedHDRHEIC`）の拡張リニア Display P3。LUT も同じ
     ///   空間で構築しているため色が整合する。ゲインは輝度でなく色そのもので引くため、
     ///   Apple の「色ごとの伸ばし方」を再現する（肌は控えめ、空・鮮やか色は伸びる）。
-    private static func makeLUTExpandedHDR(_ sdr: CIImage, lutData: Data, input: URL) throws -> CIImage {
+    /// - `warmth` / `tint` が非ゼロなら、明部だけ色をずらす per-channel tint を掛ける
+    ///   （色温度軸とマゼンタ⇔グリーン軸。後者は輝度中立）。
+    private static func makeLUTExpandedHDR(_ sdr: CIImage, lutData: Data, input: URL,
+                                           warmth: Double = 0.0,
+                                           tint: Double = 0.0) throws -> CIImage {
         guard let cubeFilter = CIFilter(name: "CIColorCube") else {
             throw GainForgeError.hdrSynthesisFailed(input)
         }
@@ -465,7 +580,10 @@ public enum GainForge {
         }
         guard let kernel = expandLUTKernel,
               let out = kernel.apply(extent: sdr.extent,
-                                     arguments: [sdr, gPrime, Float(gainLUTMax - 1.0)]) else {
+                                     arguments: [sdr, gPrime, Float(gainLUTMax - 1.0),
+                                                 Float(HighlightWarmth.coefficient(warmth)),
+                                                 Float(HighlightTint.coefficient(tint)),
+                                                 Float(HighlightTint.luminanceNeutralRatio)]) else {
             throw GainForgeError.hdrSynthesisFailed(input)
         }
         return out

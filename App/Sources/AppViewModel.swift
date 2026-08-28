@@ -27,6 +27,16 @@ final class AppViewModel: ObservableObject {
     @Published var sdrMode: SDRConversion {
         didSet { defaults.set(sdrMode.rawValue, forKey: Keys.sdrMode) }
     }
+    /// 明部だけの色温度調整（-1.0…1.0、既定 0.0 で無効）。`sdrMode` が `.hdrCurve` / `.hdrML` の
+    /// ときだけ効く。`.sdr` と、ゲインマップ付き入力（生転写）には作用しない。
+    @Published var highlightWarmth: Double {
+        didSet { defaults.set(highlightWarmth, forKey: Keys.highlightWarmth) }
+    }
+    /// 明部だけのティント調整（-1.0…1.0、既定 0.0 で無効）。正でマゼンタ、負でグリーン。
+    /// `highlightWarmth` と同じく `sdrMode` が `.hdrCurve` / `.hdrML` のときだけ効く。
+    @Published var highlightTint: Double {
+        didSet { defaults.set(highlightTint, forKey: Keys.highlightTint) }
+    }
 
     // MARK: - リサイズ設定
     // 方式（種別）と各方式の数値を別々に保持・永続化する。方式を切り替えても各値を覚えておき、
@@ -75,6 +85,8 @@ final class AppViewModel: ObservableObject {
         static let outputIsCustom = "gf.outputIsCustom"
         static let customFolderPath = "gf.customFolderPath"
         static let sdrMode = "gf.sdrMode"
+        static let highlightWarmth = "gf.highlightWarmth"
+        static let highlightTint = "gf.highlightTint"
         static let resizeKind = "gf.resizeKind"
         static let resizeMegapixels = "gf.resizeMegapixels"
         static let resizeWidth = "gf.resizeWidth"
@@ -87,6 +99,9 @@ final class AppViewModel: ObservableObject {
         static let outputMode = OutputMode.sameFolder
         // 既定は従来挙動（SDR 画像は SDR HEIC で保存）。HDR 補正はユーザーが明示選択する。
         static let sdrMode = SDRConversion.sdr
+        // 既定は無効（0.0）。従来の出力と完全に同一になる。
+        static let highlightWarmth = 0.0
+        static let highlightTint = 0.0
         // 既定はリサイズなし。各方式の初期値は一般的な値（切替時に個別に覚える）。
         static let resizeKind = ResizeKind.original
         static let resizeMegapixels = 8.0
@@ -102,6 +117,8 @@ final class AppViewModel: ObservableObject {
         self.outputMode = defaults.bool(forKey: Keys.outputIsCustom) ? .customFolder : .sameFolder
         self.sdrMode = defaults.string(forKey: Keys.sdrMode)
             .flatMap(SDRConversion.init(rawValue:)) ?? Defaults.sdrMode
+        self.highlightWarmth = (defaults.object(forKey: Keys.highlightWarmth) as? Double) ?? Defaults.highlightWarmth
+        self.highlightTint = (defaults.object(forKey: Keys.highlightTint) as? Double) ?? Defaults.highlightTint
         self.resizeKind = defaults.string(forKey: Keys.resizeKind)
             .flatMap(ResizeKind.init(rawValue:)) ?? Defaults.resizeKind
         self.resizeMegapixels = (defaults.object(forKey: Keys.resizeMegapixels) as? Double) ?? Defaults.resizeMegapixels
@@ -296,6 +313,8 @@ final class AppViewModel: ObservableObject {
         outputMode = Defaults.outputMode
         customFolder = nil
         sdrMode = Defaults.sdrMode
+        highlightWarmth = Defaults.highlightWarmth
+        highlightTint = Defaults.highlightTint
         resizeKind = Defaults.resizeKind
         resizeMegapixels = Defaults.resizeMegapixels
         resizeWidth = Defaults.resizeWidth
@@ -368,6 +387,8 @@ final class AppViewModel: ObservableObject {
 
         let quality = self.quality
         let sdrMode = self.sdrMode
+        let highlightWarmth = self.highlightWarmth
+        let highlightTint = self.highlightTint
         let resize = self.resizeMode
 
         // 同時実行数はコア数を基準に上限でクランプする。1 枚のエンコードは ImageIO/CoreImage の
@@ -391,7 +412,9 @@ final class AppViewModel: ObservableObject {
                 while inFlight < maxConcurrent, next < waitingIDs.count, !cancelRequested {
                     if let op = conversionOperation(for: waitingIDs[next],
                                                     plan: planByID[waitingIDs[next]],
-                                                    quality: quality, sdrMode: sdrMode, resize: resize) {
+                                                    quality: quality, sdrMode: sdrMode, resize: resize,
+                                                    highlightWarmth: highlightWarmth,
+                                                    highlightTint: highlightTint) {
                         group.addTask(priority: .userInitiated, operation: op)
                         inFlight += 1
                     }
@@ -406,7 +429,9 @@ final class AppViewModel: ObservableObject {
                         let id = waitingIDs[next]
                         next += 1
                         if let op = conversionOperation(for: id, plan: planByID[id],
-                                                        quality: quality, sdrMode: sdrMode, resize: resize) {
+                                                        quality: quality, sdrMode: sdrMode, resize: resize,
+                                                        highlightWarmth: highlightWarmth,
+                                                        highlightTint: highlightTint) {
                             group.addTask(priority: .userInitiated, operation: op)
                             inFlight += 1
                             break
@@ -435,7 +460,9 @@ final class AppViewModel: ObservableObject {
         plan: (output: URL, overwrite: Bool)?,
         quality: Double,
         sdrMode: SDRConversion,
-        resize: ResizeMode
+        resize: ResizeMode,
+        highlightWarmth: Double,
+        highlightTint: Double
     ) -> (@Sendable () async -> Void)? {
         guard let plan, let input = items.first(where: { $0.id == id })?.inputURL else { return nil }
 
@@ -455,7 +482,8 @@ final class AppViewModel: ObservableObject {
                     // ゲインマップ無し入力の扱い（SDR 保存 / HDR 補正）は sdrMode に従う。
                     let r = try GainForge.convert(input: input, output: output, quality: quality,
                                                   force: true, overwrite: overwrite, sdrMode: sdrMode,
-                                                  resize: resize)
+                                                  resize: resize, highlightWarmth: highlightWarmth,
+                                                  highlightTint: highlightTint)
                     return .success(r)
                 } catch let e as GainForgeError {
                     // 計画外の既存ファイルへの衝突は「中断」扱いにしてバッチを止める。

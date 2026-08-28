@@ -27,6 +27,8 @@ public enum GainForgeError: Error, Sendable {
     case outputExists(URL)
     /// SDR→HDR 合成（明部加重ゲイン等）に失敗した。
     case hdrSynthesisFailed(URL)
+    /// 3ch カラーゲインマップの生成・添付に失敗した（明部の色温度調整が有効なときのみ）。
+    case colorGainMapFailed
 }
 
 extension GainForgeError: LocalizedError {
@@ -54,6 +56,8 @@ extension GainForgeError: LocalizedError {
             return "出力先に既存ファイルがあります: \(url.lastPathComponent)"
         case .hdrSynthesisFailed(let url):
             return "SDR から HDR への合成に失敗しました: \(url.lastPathComponent)"
+        case .colorGainMapFailed:
+            return "カラーゲインマップを生成できませんでした"
         }
     }
 }

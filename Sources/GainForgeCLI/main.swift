@@ -18,6 +18,8 @@ var forceNonHDR = false
 var allowOverwrite = false
 var sdrMode: SDRConversion = .sdr
 var resize: ResizeMode = .original
+var highlightWarmth = 0.0
+var highlightTint = 0.0
 var inputs: [String] = []
 
 let argv = CommandLine.arguments
@@ -41,6 +43,16 @@ while argi < argv.count {
         // ゲインマップ無し画像を SDR→HDR 補正（Apple 学習の色→ゲイン統計 LUT）で変換。指定時は force 相当。
         sdrMode = .hdrML
         forceNonHDR = true
+    case "--warm":
+        // 明部だけ色温度を下げる（正で暖色）。-x / -m と併用したときだけ効く。
+        // 省略時 0.0 で従来と完全に同じ出力になる。
+        argi += 1
+        if argi < argv.count, let v = Double(argv[argi]) { highlightWarmth = max(-1.0, min(1.0, v)) }
+    case "--tint":
+        // 明部だけマゼンタ/グリーンへ寄せる（正でマゼンタ）。輝度は変えない。
+        // 省略時 0.0 で従来と完全に同じ出力になる。
+        argi += 1
+        if argi < argv.count, let v = Double(argv[argi]) { highlightTint = max(-1.0, min(1.0, v)) }
     case "-y", "--overwrite":
         allowOverwrite = true
     case "--mpix":
@@ -56,12 +68,16 @@ while argi < argv.count {
         argi += 1
         if argi < argv.count, let px = Int(argv[argi]), px > 0 { resize = .fitHeight(px) }
     case "-h", "--help":
-        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-x] [-m] [-y] [--mpix N | -w px | --height px] <入力ファイル/フォルダ ...>")
+        print("使い方: gainforge [-q 0.0-1.0] [-o 出力先] [-f] [-x] [-m] [--warm N] [--tint N] [-y] [--mpix N | -w px | --height px] <入力ファイル/フォルダ ...>")
         print("  -q       HEVC 品質（既定 0.6）")
         print("  -o       出力フォルダ（省略時は入力と同じ場所に .heic）")
         print("  -f       ゲインマップ無し画像も SDR HEIC として変換")
         print("  -x, --hdr     ゲインマップ無し画像を HDR 自動補正（明部加重カーブ）して変換")
         print("  -m, --hdr-ml  ゲインマップ無し画像を HDR 自動補正（Apple 学習の色→ゲイン LUT）して変換")
+        print("  --warm N      明部だけ色温度を下げる（-1.0〜1.0、既定 0＝無効。正で暖色）")
+        print("                ※ -x / -m と併用したときだけ効く。0 のときの出力は従来と同一。")
+        print("  --tint N      明部だけマゼンタ/グリーンへ寄せる（-1.0〜1.0、既定 0＝無効。正でマゼンタ）")
+        print("                ※ 輝度は変えずに色だけ寄せる。--warm と同時に指定できる。")
         print("  -y       既存の出力ファイルを上書き（既定はスキップ）")
         print("  --mpix N      アスペクト維持で総画素数(百万画素)へ縮小（例 --mpix 8）")
         print("  -w, --width px   アスペクト維持で横幅(px)へ縮小")
@@ -91,6 +107,12 @@ if let od = outDir {
     try? FileManager.default.createDirectory(atPath: od, withIntermediateDirectories: true)
 }
 
+// 明部の色温度調整（--warm）は 3ch カラーゲインマップ経路に依存する。その経路を用意できない
+// 環境では調整だけ無効になる（変換自体は従来経路で成功する）ので、開始前に一度だけ通知する。
+if !highlightWarmth.isZero || !highlightTint.isZero, !GainForge.isHighlightColorShiftAvailable {
+    errPrint("注意: この環境ではカラーゲインマップを生成できないため、--warm / --tint は無効になります（変換は従来どおり行います）。")
+}
+
 // ML/LUT 方式（-m）を選んでも学習 LUT を読めない場合はカーブ法（-x 相当）へ降格する。
 // 開始前に一度だけ通知する（降格は全ファイル共通のため 1 回で足りる）。
 if sdrMode == .hdrML, !GainForge.isMLGainLUTAvailable {
@@ -112,7 +134,8 @@ for inURL in files {
     do {
         let result = try GainForge.convert(
             input: inURL, output: outURL, quality: quality, force: forceNonHDR,
-            overwrite: allowOverwrite, sdrMode: sdrMode, resize: resize
+            overwrite: allowOverwrite, sdrMode: sdrMode, resize: resize,
+            highlightWarmth: highlightWarmth, highlightTint: highlightTint
         )
         let ratio = result.sizeRatio.map { Int(100.0 * $0) } ?? 0
         let tag = result.isHDR ? "HDR" : "SDR"
