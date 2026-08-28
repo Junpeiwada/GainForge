@@ -3,12 +3,12 @@
     <channel>
         <title>GainForge</title>
         <item>
-            <title>1.1.0</title>
-            <pubDate>Wed, 08 Jul 2026 15:22:36 +0000</pubDate>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <title>1.2.0</title>
+            <pubDate>Fri, 28 Aug 2026 11:11:52 +0000</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/Junpeiwada/GainForge/releases/download/v1.1.0/GainForge-1.1.0.zip" length="1706432" type="application/octet-stream" sparkle:edSignature="sHCz1YaisIuLFneys5w2sDdAy+ul+i2Ft2EDLKD3w+z3BRqkAUekTDu5/KDp+b8rzR5551Y9GTkiJNrof2Z6DQ=="/>
+            <enclosure url="https://github.com/Junpeiwada/GainForge/releases/download/v1.2.0/GainForge-1.2.0.zip" length="1752158" type="application/octet-stream" sparkle:edSignature="K/StCakGaKkFShVD/PypJ9uFQwoy56Td+TCrzaDfQ7E4Wnmwia3LBUeFXWiA6Ov6sV4+L99A7qRXdU1hdGy3BQ=="/>
         </item>
     </channel>
 </rss>
